@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: fnn-training
+spec:
+  schedule: "*/3 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          containers:
+            - name: train
+              image: fnn-train:latest
+              imagePullPolicy: Never
+              env:
+                - name: KAFKA_BROKER
+                  value: "kafka-svc:9092"
+              args:
+                - "--historico"
+                - "/data/raw/historico_1000_base.csv"
+                - "--epochs"
+                - "30"
+                - "--workers"
+                - "4"
+                - "--threshold"
+                - "20"
+              volumeMounts:
+                - name: app-code
+                  mountPath: /app
+                - name: shared-data
+                  mountPath: /data
+          restartPolicy: Never
+          volumes:
+            - name: app-code
+              hostPath:
+                path: /mnt/host/app
+                type: Directory
+            - name: shared-data
+              hostPath:
+                path: /mnt/host/data
+                type: Directory

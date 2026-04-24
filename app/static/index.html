@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Predicción de Compras</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; color: #1a1a2e; min-height: 100vh; }
+
+    .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: white; padding: 1.5rem 2rem; }
+    .header h1 { font-size: 1.4rem; font-weight: 600; }
+    .header p { font-size: 0.85rem; opacity: 0.7; margin-top: 0.3rem; }
+
+    .container { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+
+    .card { background: white; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .card h2 { font-size: 1rem; color: #16213e; margin-bottom: 1rem; }
+
+    .search-row { display: flex; gap: 0.8rem; align-items: center; }
+    .search-row input {
+      flex: 1; padding: 0.7rem 1rem; border: 2px solid #e0e0e0; border-radius: 8px;
+      font-size: 1rem; outline: none; transition: border-color 0.2s;
+    }
+    .search-row input:focus { border-color: #0f3460; }
+    .search-row button {
+      padding: 0.7rem 1.5rem; background: #0f3460; color: white; border: none;
+      border-radius: 8px; font-size: 0.95rem; cursor: pointer; white-space: nowrap;
+      transition: background 0.2s;
+    }
+    .search-row button:hover { background: #1a1a2e; }
+    .search-row button:disabled { background: #999; cursor: wait; }
+
+    .error { color: #e74c3c; font-size: 0.9rem; margin-top: 0.8rem; display: none; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+    th { text-align: left; font-size: 0.8rem; color: #888; padding: 0.6rem 0.8rem; border-bottom: 2px solid #f0f2f5; }
+    td { padding: 0.8rem; border-bottom: 1px solid #f5f5f5; font-size: 0.95rem; }
+    tr:hover td { background: #fafbfc; }
+
+    .rank { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; font-weight: 700; font-size: 0.85rem; }
+    .rank-1 { background: #fff3cd; color: #856404; }
+    .rank-2 { background: #e2e3e5; color: #495057; }
+    .rank-3 { background: #f8d7da; color: #721c24; }
+
+    .proba-bar { display: flex; align-items: center; gap: 0.5rem; }
+    .proba-bar .bar { height: 8px; border-radius: 4px; background: #0f3460; transition: width 0.5s; }
+    .proba-bar span { font-size: 0.85rem; color: #555; min-width: 50px; }
+
+    .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.8rem; }
+    .health-item { text-align: center; padding: 0.8rem; background: #f8f9fa; border-radius: 8px; }
+    .health-item .value { font-size: 1.3rem; font-weight: 700; color: #0f3460; }
+    .health-item .label { font-size: 0.75rem; color: #888; margin-top: 0.2rem; }
+
+    .meta { font-size: 0.8rem; color: #999; margin-top: 0.8rem; }
+    #results { display: none; }
+    .loading { text-align: center; padding: 1rem; color: #888; display: none; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Sistema de Recomendaciones de Compra</h1>
+    <p>Predicción Top-3 subcategorías con mayor probabilidad de compra</p>
+  </div>
+
+  <div class="container">
+    <!-- Búsqueda -->
+    <div class="card">
+      <h2>Consultar Recomendaciones</h2>
+      <div class="search-row">
+        <input type="number" id="cedula" placeholder="Ingrese cédula / núcleo familiar" />
+        <button id="btn" onclick="predict()">Recomendar</button>
+      </div>
+      <div class="error" id="error"></div>
+    </div>
+
+    <!-- Resultados -->
+    <div class="loading" id="loading">Consultando modelo...</div>
+    <div id="results" class="card">
+      <h2>Top 3 Recomendaciones para <span id="res-cedula"></span></h2>
+      <table>
+        <thead><tr><th>#</th><th>Subcategoría</th><th>Probabilidad de Compra</th></tr></thead>
+        <tbody id="res-body"></tbody>
+      </table>
+      <p class="meta" id="res-meta"></p>
+    </div>
+
+    <!-- Health -->
+    <div class="card">
+      <h2>Estado del Modelo</h2>
+      <div class="health-grid" id="health-grid">
+        <div class="health-item"><div class="value" id="h-status">--</div><div class="label">Estado</div></div>
+        <div class="health-item"><div class="value" id="h-familias">--</div><div class="label">Familias</div></div>
+        <div class="health-item"><div class="value" id="h-series">--</div><div class="label">Series</div></div>
+        <div class="health-item"><div class="value" id="h-precision">--</div><div class="label">Precision@3</div></div>
+        <div class="health-item"><div class="value" id="h-hitrate">--</div><div class="label">Hit Rate@3</div></div>
+      </div>
+      <p class="meta" id="h-meta"></p>
+    </div>
+  </div>
+
+<script>
+  const API = window.location.origin;
+
+  async function predict() {
+    const cedula = document.getElementById('cedula').value.trim();
+    const err = document.getElementById('error');
+    const results = document.getElementById('results');
+    const loading = document.getElementById('loading');
+    err.style.display = 'none';
+    results.style.display = 'none';
+
+    if (!cedula) { err.textContent = 'Ingrese una cédula'; err.style.display = 'block'; return; }
+
+    document.getElementById('btn').disabled = true;
+    loading.style.display = 'block';
+
+    try {
+      const res = await fetch(`${API}/predict/${cedula}`);
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.detail || `Error ${res.status}`);
+      }
+      const data = await res.json();
+      document.getElementById('res-cedula').textContent = data.cedula;
+      const body = document.getElementById('res-body');
+      body.innerHTML = '';
+      data.predictions.forEach((p, i) => {
+        const pct = (p.proba_compra * 100).toFixed(1);
+        body.innerHTML += `
+          <tr>
+            <td><span class="rank rank-${i+1}">${i+1}</span></td>
+            <td><strong>${p.subcategoria}</strong></td>
+            <td><div class="proba-bar"><div class="bar" style="width:${pct}%"></div><span>${pct}%</span></div></td>
+          </tr>`;
+      });
+      document.getElementById('res-meta').textContent = `Total series evaluadas: ${data.total_series}`;
+      results.style.display = 'block';
+    } catch (e) {
+      err.textContent = e.message;
+      err.style.display = 'block';
+    } finally {
+      document.getElementById('btn').disabled = false;
+      loading.style.display = 'none';
+    }
+  }
+
+  document.getElementById('cedula').addEventListener('keydown', e => { if (e.key === 'Enter') predict(); });
+
+  async function loadHealth() {
+    try {
+      const res = await fetch(`${API}/health`);
+      const d = await res.json();
+      document.getElementById('h-status').textContent = d.model_loaded ? 'Activo' : 'Sin modelo';
+      document.getElementById('h-status').style.color = d.model_loaded ? '#27ae60' : '#e74c3c';
+      document.getElementById('h-familias').textContent = d.total_familias;
+      document.getElementById('h-series').textContent = d.total_series;
+      document.getElementById('h-precision').textContent = (d['precision@3'] * 100).toFixed(1) + '%';
+      document.getElementById('h-hitrate').textContent = (d['hit_rate@3'] * 100).toFixed(1) + '%';
+      document.getElementById('h-meta').textContent = `Modelo: ${d.model_timestamp || 'N/A'} | Reload cada ${d.reload_interval_s}s`;
+    } catch (e) {
+      document.getElementById('h-status').textContent = 'Error';
+      document.getElementById('h-status').style.color = '#e74c3c';
+    }
+  }
+
+  loadHealth();
+  setInterval(loadHealth, 30000);
+</script>
+</body>
+</html>
