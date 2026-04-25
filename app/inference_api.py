@@ -23,6 +23,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from prometheus_client import Counter, Histogram, make_asgi_app
 
 from config import (
     FEATURES_TRAIN_FILE,
@@ -31,8 +32,29 @@ from config import (
     MODEL_META_FILE,
     FEATURE_COLUMNS,
 )
+from train_fnn import _build_features
 
 RELOAD_INTERVAL = int(os.environ.get("RELOAD_INTERVAL", 120))
+KAFKA_BROKER = os.environ.get("KAFKA_BROKER", "kafka-svc:9092")
+
+# ── Métricas Prometheus ───────────────────────────────────────────────────────
+REQUEST_COUNT   = Counter("requests_total", "Total requests", ["status"])
+REQUEST_LATENCY = Histogram("request_latency_seconds", "Request latency")
+
+# ── Kafka producer (simple) ───────────────────────────────────────────────────
+_kafka_producer = None
+
+def _get_kafka():
+    global _kafka_producer
+    if _kafka_producer is None:
+        try:
+            from kafka import KafkaProducer
+            _kafka_producer = KafkaProducer(bootstrap_servers=KAFKA_BROKER)
+            print(f"[Kafka] Producer conectado a {KAFKA_BROKER}")
+        except Exception as e:
+            print(f"[Kafka] No disponible: {e}")
+            _kafka_producer = False
+    return _kafka_producer if _kafka_producer else None
 
 # ── Estado global (se carga al iniciar) ──────────────────────────────────────
 MODEL = None
@@ -116,6 +138,8 @@ async def lifespan(app):
 
 app = FastAPI(title="Predicción de Compras", version="1.0", lifespan=lifespan)
 
+app.mount("/metrics", make_asgi_app())
+
 STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -158,8 +182,8 @@ def predict(cedula: int, top_n: int = 3):
     if df_family.empty:
         raise HTTPException(status_code=404, detail=f"Cédula {cedula} no encontrada")
 
-    feat_cols = META["feature_columns"]
-    X = np.nan_to_num(df_family[feat_cols].values.astype(np.float32), nan=0.0)
+    feat_cols_base = [c for c in FEATURE_COLUMNS if c in df_family.columns]
+    X, _ = _build_features(df_family, feat_cols_base)
 
     with torch.no_grad():
         probas = torch.sigmoid(MODEL(torch.tensor(X))).numpy()
@@ -176,16 +200,27 @@ def predict(cedula: int, top_n: int = 3):
         for _, row in df_result.iterrows()
     ]
 
-    # Publicar a Kafka (async-safe, no bloquea si Kafka no está)
-    try:
-        from kafka_helper import publish
-        publish("predictions.log", {
-            "cedula": cedula,
-            "top_subcategorias": [p["subcategoria"] for p in preds],
-            "latencia_ms": round((time.time() - t_start) * 1000, 1),
-        })
-    except Exception:
-        pass
+    latencia = time.time() - t_start
+    REQUEST_COUNT.labels(status="200").inc()
+    REQUEST_LATENCY.observe(latencia)
+
+    # Log a Kafka (simple, no bloquea si falla)
+    kafka = _get_kafka()
+    if kafka:
+        try:
+            import json
+            from datetime import datetime
+            msg = json.dumps({
+                "timestamp": datetime.now().isoformat(),
+                "cedula": cedula,
+                "subcategorias": [p["subcategoria"] for p in preds],
+                "latencia_ms": round(latencia * 1000, 1)
+            })
+            kafka.send("predictions.log", msg.encode('utf-8'))
+            kafka.flush()
+            print(f"[Kafka] Mensaje enviado: cedula={cedula}")
+        except Exception as e:
+            print(f"[Kafka] Error al enviar: {e}")
 
     return {
         "cedula": cedula,

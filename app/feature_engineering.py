@@ -370,8 +370,9 @@ def run_pipeline(
 
     combined = pd.concat(results, ignore_index=True)
 
-    # 5. Solo columnas esenciales
-    keep = ["nucleo", "COD_SUBCATEGORIA"] + FEATURE_COLUMNS + ["target"]
+    # 5. Solo columnas esenciales (incluye tipo_ciclo para one-hot en training)
+    from config import TIPO_CICLO_COL
+    keep = ["nucleo", "COD_SUBCATEGORIA"] + FEATURE_COLUMNS + [TIPO_CICLO_COL] + ["target"]
     keep = [c for c in keep if c in combined.columns]
     new_features = combined[keep]
 

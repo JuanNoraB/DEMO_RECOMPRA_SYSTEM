@@ -29,17 +29,11 @@ spec:
                 - "--threshold"
                 - "20"
               volumeMounts:
-                - name: app-code
-                  mountPath: /app
                 - name: shared-data
                   mountPath: /data
           restartPolicy: Never
           volumes:
-            - name: app-code
-              hostPath:
-                path: /mnt/host/app
-                type: Directory
             - name: shared-data
               hostPath:
-                path: /mnt/host/data
+                path: /data
                 type: Directory

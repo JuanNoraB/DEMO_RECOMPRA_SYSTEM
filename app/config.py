@@ -58,7 +58,11 @@ FEATURE_COLUMNS = [
     "season_ratio",
     "score_final",
     "ciclo_dias_mu",
+    "Ciclos_ciclo_binario_c",
 ]
+
+TIPO_CICLO_COL = "Debug_ciclos_tipo_ciclo_b"
+TIPO_CICLO_CATEGORIES = ["corto", "corto_medio", "largo", "mediano", "no_ciclico"]
 
 # ── Archivos de salida por defecto ───────────────────────────────────────────
 FEATURES_TRAIN_FILE = FEATURES_DIR / "features_train.parquet"

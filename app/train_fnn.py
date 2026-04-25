@@ -16,11 +16,37 @@ import torch.nn as nn
 
 from config import (
     FEATURE_COLUMNS,
+    TIPO_CICLO_COL,
+    TIPO_CICLO_CATEGORIES,
     FEATURES_INFERENCE_FILE,
     FEATURES_TRAIN_FILE,
     MODEL_FILE,
     MODEL_META_FILE,
 )
+
+
+def _build_features(df: pd.DataFrame, feat_cols_base: list) -> tuple[np.ndarray, list]:
+    """
+    Construye la matriz X aplicando one-hot encoding de tipo_ciclo_b.
+    Retorna (X_array, lista_de_columnas_finales).
+    Usa categorías fijas para que train e inference sean idénticos.
+    """
+    X_base = df[feat_cols_base].copy()
+
+    if TIPO_CICLO_COL in df.columns:
+        dummies = pd.get_dummies(
+            pd.Categorical(df[TIPO_CICLO_COL], categories=TIPO_CICLO_CATEGORIES),
+            prefix="tipo",
+            drop_first=True,
+        )
+        dummies.index = X_base.index
+        X_all = pd.concat([X_base, dummies], axis=1)
+    else:
+        X_all = X_base
+
+    final_cols = list(X_all.columns)
+    X = np.nan_to_num(X_all.values.astype(np.float32), nan=0.0)
+    return X, final_cols
 
 
 # ── Modelo ────────────────────────────────────────────────────────────────────
@@ -91,11 +117,11 @@ def run_training(features_path=None, epochs=50, lr=1e-3, test_size=0.2):
         features_path = FEATURES_TRAIN_FILE
 
     df = pd.read_parquet(features_path)
-    feat_cols = [c for c in FEATURE_COLUMNS if c in df.columns]
+    feat_cols_base = [c for c in FEATURE_COLUMNS if c in df.columns]
+    X, feat_cols = _build_features(df, feat_cols_base)
     print(f"[Train] {len(df)} filas | {df['nucleo'].nunique()} familias | {len(feat_cols)} features")
     print(f"[Train] Target: {int(df['target'].sum())} positivos / {len(df)} ({df['target'].mean()*100:.1f}%)")
 
-    X = np.nan_to_num(df[feat_cols].values.astype(np.float32), nan=0.0)
     y = df["target"].values.astype(np.float32)
 
     # Split train/val (guardamos índices para evaluación top-k después)
@@ -147,7 +173,12 @@ def run_training(features_path=None, epochs=50, lr=1e-3, test_size=0.2):
 
     # ── Evaluación Top-K sobre validación ────────────────────────────────
     df_val = df.iloc[val_idx].copy()
-    topk_metrics = evaluate_topk(model, df_val, feat_cols, top_k=3)
+    # re-construir X_val con one-hot para evaluate_topk
+    X_val_full, _ = _build_features(df_val, feat_cols_base)
+    df_val_aug = df_val.copy()
+    for i, col in enumerate(feat_cols):
+        df_val_aug[col] = X_val_full[:, i]
+    topk_metrics = evaluate_topk(model, df_val_aug, feat_cols, top_k=3)
     print(f"[Eval]  Familias evaluadas: {topk_metrics['n_families']}")
     print(f"[Eval]  Precision@3: {topk_metrics['precision@k']:.4f} ({topk_metrics['precision@k']*100:.1f}%)")
     print(f"[Eval]  Hit Rate@3:  {topk_metrics['hit_rate@k']:.4f} ({topk_metrics['hit_rate@k']*100:.1f}%)")
@@ -189,8 +220,9 @@ def run_inference(features_path=None, output_path=None):
     model.eval()
 
     df = pd.read_parquet(features_path)
-    feat_cols = meta["feature_columns"]
-    X = np.nan_to_num(df[feat_cols].values.astype(np.float32), nan=0.0)
+    feat_cols_base = [c for c in FEATURE_COLUMNS if c in df.columns]
+    X, _ = _build_features(df, feat_cols_base)
+    feat_cols = meta["feature_columns"]  # columnas guardadas en training (incluye one-hot)
 
     with torch.no_grad():
         probas = torch.sigmoid(model(torch.tensor(X).to(device))).cpu().numpy()

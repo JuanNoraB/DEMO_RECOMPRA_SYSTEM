@@ -22,18 +22,12 @@ spec:
             - name: KAFKA_BROKER
               value: "kafka-svc:9092"
           volumeMounts:
-            - name: app-code
-              mountPath: /app
             - name: shared-data
               mountPath: /data
       volumes:
-        - name: app-code
-          hostPath:
-            path: /mnt/host/app
-            type: Directory
         - name: shared-data
           hostPath:
-            path: /mnt/host/data
+            path: /data
             type: Directory
 ---
 apiVersion: v1
