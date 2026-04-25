@@ -1,0 +1,52 @@
+# Nombre del workflow que verás en la pestaña "Actions" de GitHub
+name: CI
+
+# Cuándo se ejecuta:
+# - Cada vez que haces push a main
+# - Cada vez que abres o actualizas un pull request
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    # Máquina virtual temporal de GitHub Actions
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Descarga el código del repositorio dentro del runner
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # 2. Construye la imagen de inferencia.
+      # Esto valida Dockerfile.inference, requirements.txt y app/
+      - name: Build inference Docker image
+        run: docker build -f Dockerfile.inference -t fnn-inference:test .
+
+      # 3. Construye la imagen de entrenamiento.
+      # Esto valida Dockerfile.train, requirements.txt y app/
+      - name: Build train Docker image
+        run: docker build -f Dockerfile.train -t fnn-train:test .
+
+      # 4. Valida que los módulos principales importen bien dentro del contenedor.
+      # No entrena el modelo.
+      # No necesita data.
+      # Solo detecta errores de imports, dependencias faltantes o código roto.
+      - name: Validate Python imports inside inference image
+        run: |
+          docker run --rm fnn-inference:test python -c "import config; import train_fnn; import feature_engineering; import inference_api; print('imports ok')"
+
+      # 5. Instala kubectl en el runner.
+      # Se usa solo para validar sintaxis/estructura de YAML.
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+
+      # 6. Valida los manifiestos de Kubernetes sin aplicarlos realmente.
+      # dry-run=client significa:
+      # "revisa si los YAML son válidos, pero no crees nada".
+      - name: Validate Kubernetes manifests
+        run: |
+          kubectl apply --dry-run=client -f k8s/
