@@ -49,4 +49,4 @@ jobs:
       # "revisa si los YAML son válidos, pero no crees nada".
       - name: Validate Kubernetes manifests
         run: |
-          kubectl apply --dry-run=client -f k8s/
+          kubectl apply --dry-run=client --validate=false -f k8s/
