@@ -48,4 +48,11 @@ jobs:
       # dry-run=client significa:
       # "revisa si los YAML son válidos, pero no crees nada".
       - name: Validate Kubernetes manifests
-        run: docker run --rm -v "${PWD}:/work" ghcr.io/yannh/kubeconform:latest -summary -strict /work/k8s/*.yaml
+        run: |
+            docker run --rm -v "${PWD}:/work" ghcr.io/yannh/kubeconform:latest \
+                -summary \
+                -strict \
+                /work/k8s/inference-deployment.yaml \
+                /work/k8s/kafka.yaml \
+                /work/k8s/monitoring.yaml \
+                /work/k8s/training-job.yaml
