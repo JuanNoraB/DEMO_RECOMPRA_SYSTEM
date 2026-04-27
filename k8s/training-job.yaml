@@ -25,7 +25,7 @@ spec:
                 - "--epochs"
                 - "30"
                 - "--workers"
-                - "4"
+                - "8"
                 - "--threshold"
                 - "20"
               volumeMounts:

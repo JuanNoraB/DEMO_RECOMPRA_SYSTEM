@@ -107,17 +107,6 @@ def ingest_days(n_days: int):
     cursor["last_date_ingested"] = str(dates_to_ingest[-1])
     _save_cursor(cursor)
 
-    # Publicar a Kafka
-    from kafka_helper import publish
-    publish("tx.nuevas", {
-        "registros_insertados": len(df_new),
-        "dias_insertados": len(dates_to_ingest),
-        "fecha_inicio": str(dates_to_ingest[0]),
-        "fecha_fin": str(dates_to_ingest[-1]),
-        "series_afectadas": len(new_series),
-        "tx_acumuladas": counter["total_new"],
-    })
-
     print(f"[Ingest] Insertados {len(df_new)} registros de {len(dates_to_ingest)} días")
     print(f"  Fechas: {dates_to_ingest[0]} → {dates_to_ingest[-1]}")
     print(f"  Series afectadas (esta vez): {len(new_series)}")

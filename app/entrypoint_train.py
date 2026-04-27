@@ -130,19 +130,6 @@ def main():
     model, meta = run_training(epochs=args.epochs, lr=args.lr)
     print(f"Training: {time.time()-t0:.1f}s")
 
-    # ── Publicar a Kafka ──────────────────────────────────────────────────
-    from kafka_helper import publish
-    publish("training.completed", {
-        "precision@3": meta.get("precision@3", 0),
-        "hit_rate@3": meta.get("hit_rate@3", 0),
-        "recall@3": meta.get("recall@3", 0),
-        "val_loss": meta.get("best_val_loss", 0),
-        "epochs": meta.get("epochs", 0),
-        "n_families_eval": meta.get("n_families_eval", 0),
-        "training_duration_s": round(time.time() - t_total, 1),
-        "model_timestamp": meta.get("timestamp", ""),
-    })
-
     # ── Resetear counter si estamos en modo CronJob ──────────────────────
     if not args.force:
         _reset_counter()
