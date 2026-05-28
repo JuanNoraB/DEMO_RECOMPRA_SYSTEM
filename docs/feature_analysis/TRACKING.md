@@ -64,9 +64,9 @@ Bitácora de los experimentos realizados y pendientes. Cada paso registra **qué
 
 ---
 
-## ✅ Paso 4 — Reentrenamiento con 11 features + hparams viejos (los tuneados para 20)
+## ✅ Paso 4 — Reentrenamiento con 11 features + hparams viejos (los tuneados para modelo anterior)
 
-**Qué se hizo:** Entrenamos FNN y LightGBM con las 11 features pero usando los mejores hiperparámetros del experimento anterior (que estaban optimizados para 20 inputs).
+**Qué se hizo:** Entrenamos FNN y LightGBM con las 11 features pero usando los mejores hiperparámetros del experimento anterior
 
 | Modelo | Antes (20 in) | Después (11 in) | Δ |
 |---|---:|---:|:---:|
