@@ -734,12 +734,16 @@ def compute_seasonality_features(df_family: pd.DataFrame, ciclos_estacionales: p
             exceso = ratio - 1.2
             score = 0.95 * np.exp(-exceso * 0.5)  # Decae suave
         
+        # Clipar ratio_temporal a [0, 10] para evitar el sentinel 999
+        # cuando compras_pasado == 0 (caso de no historial comparable).
+        ratio_clipped = float(min(ratio, 10.0))
+
         resultados.append({
             "COD_SUBCATEGORIA": subcat,
             "season_ratio": score,
             "compras_actual": compras_actual,
             "compras_pasado": compras_pasado,
-            "ratio_temporal": ratio
+            "ratio_temporal": ratio_clipped
         })
     
     return pd.DataFrame(resultados)

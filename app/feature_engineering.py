@@ -120,6 +120,14 @@ def compute_features_for_family(
 
     subcat_agg = subcat_agg.sort_values("total_venta_neta", ascending=False).reset_index(drop=True)
 
+    # ── Ticket promedio (nueva feature monetaria) ────────────────────────
+    subcat_agg["ticket_promedio"] = (
+        subcat_agg["total_venta_neta"] / subcat_agg["facturas_unicas"].replace(0, np.nan)
+    ).fillna(0.0)
+
+    # ── Conteo de subcategorías activas en la familia (nivel familia) ────
+    n_subcats_familia = int(df_family["COD_SUBCATEGORIA"].nunique())
+
     # ── Ciclos estacionales ──────────────────────────────────────────────
     ciclos_estacionales = calcular_ciclos_por_bloques(
         df_ventas=df_family,
@@ -164,6 +172,14 @@ def compute_features_for_family(
     features_final = features_final.merge(seasonality_features, on="COD_SUBCATEGORIA", how="left")
     features_final = features_final.merge(ciclos_estacionales, on="COD_SUBCATEGORIA", how="left")
     features_final = features_final.merge(ciclos_debug, on="COD_SUBCATEGORIA", how="left")
+    # Merge ticket_promedio desde subcat_agg
+    features_final = features_final.merge(
+        subcat_agg[["COD_SUBCATEGORIA", "ticket_promedio"]],
+        on="COD_SUBCATEGORIA",
+        how="left",
+    )
+    # n_subcats_familia es escalar a nivel familia: se replica en todas las filas
+    features_final["n_subcats_familia"] = n_subcats_familia
     features_final = features_final.fillna(0.0)
 
     # ── Score final (legacy, se mantiene por compatibilidad) ─────────────
@@ -175,6 +191,7 @@ def compute_features_for_family(
     )
 
     # ── Renombrado por origen (debug) ────────────────────────────────────
+    # Las columnas en score_columns NO se renombran y se mantienen en final_cols.
     score_columns = [
         "COD_SUBCATEGORIA",
         "recencia_hl",
@@ -185,6 +202,13 @@ def compute_features_for_family(
         "sow_24m",
         "season_ratio",
         "score_final",
+        # ── Nuevas features mantenidas en el parquet ─────────────────────
+        "dias_desde_ultima_compra",  # de recency_features (recencia cruda en días)
+        "l_compra_sobre_ciclo",      # de recency_features (cuántos ciclos pasaron)
+        "compras_reales",            # de freq_features (conteo crudo)
+        "ratio_temporal",            # de seasonality_features (ratio sin plateau)
+        "ticket_promedio",           # NUEVA: venta_total / facturas_unicas
+        "n_subcats_familia",         # NUEVA: nivel familia
     ]
 
     rename_map = {}

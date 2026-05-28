@@ -27,7 +27,7 @@ spec:
                 - "--workers"
                 - "8"
                 - "--threshold"
-                - "20"
+                - "10"
               volumeMounts:
                 - name: shared-data
                   mountPath: /data

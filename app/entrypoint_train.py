@@ -3,10 +3,13 @@ entrypoint_train.py — Punto de entrada del container/CronJob de entrenamiento.
 
 Modos:
   1. Manual (fuerza entrenamiento):
-     python entrypoint_train.py --historico data/raw/historico_1000_base.csv --force
+     python entrypoint_train.py --force
 
   2. CronJob (chequea si hay nuevas transacciones >= threshold):
-     python entrypoint_train.py --historico data/raw/historico_1000_base.csv
+     python entrypoint_train.py
+
+  El path al CSV se lee de config.py (HISTORICO_FILE) o de la variable de entorno HISTORICO_PATH.
+  Se puede sobreescribir puntualmente con --historico.
 
   En modo CronJob:
     - Lee tx_counter.json → si total_new < threshold, sale sin hacer nada
@@ -20,7 +23,7 @@ import json
 import time
 from pathlib import Path
 
-from config import DATA_DIR, NEW_TX_THRESHOLD, PREDICTION_WINDOW_DAYS
+from config import DATA_DIR, HISTORICO_FILE, NEW_TX_THRESHOLD, PREDICTION_WINDOW_DAYS
 
 
 COUNTER_FILE = DATA_DIR / "tx_counter.json"
@@ -44,8 +47,8 @@ def _reset_counter():
 
 def main():
     parser = argparse.ArgumentParser(description="Training Pipeline (features + FNN)")
-    parser.add_argument("--historico", type=str, required=True,
-                        help="Path al CSV de transacciones históricas")
+    parser.add_argument("--historico", type=str, default=str(HISTORICO_FILE),
+                        help="Path al CSV de transacciones (default: HISTORICO_FILE en config.py)")
     parser.add_argument("--filtro", type=str, default=None,
                         help="Path a CSV con CODIGO_FAMILIA;COD_SUBCATEGORIA para filtrar series")
     parser.add_argument("--prediction-window", type=int, default=PREDICTION_WINDOW_DAYS)
@@ -90,7 +93,7 @@ def main():
     t0 = time.time()
     result = run_pipeline(
         historico_path=Path(args.historico),
-        filtro_path=filtro_path,
+        filtro_path=None,
         prediction_window=args.prediction_window,
         n_workers=args.workers,
     )

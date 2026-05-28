@@ -129,6 +129,38 @@ def split_historico(
     return base, sim
 
 
+def prepare_hpt_split(
+    historico_path: Path,
+    trim_days: int = 21,
+) -> tuple:
+    """
+    Divide el histórico crudo en dos CSVs para HPT:
+      - historico_hpt_train.csv: todo menos los últimos trim_days días.
+      - historico_hpt_eval.csv:  dataset completo (sin truncar).
+
+    Los CSVs se guardan junto al original.
+    La generación de features (run_pipeline) se hace por separado en hptuning.py.
+    """
+    df = load_historical_dataset(historico_path)
+    fecha_max = df["DIM_PERIODO"].max()
+    fecha_corte = fecha_max - pd.DateOffset(days=trim_days)
+
+    df_train = df[df["DIM_PERIODO"] < fecha_corte].copy()
+    df_eval = df.copy()
+
+    parent = historico_path.parent
+    train_path = parent / "historico_hpt_train.csv"
+    eval_path = parent / "historico_hpt_eval.csv"
+
+    df_train.to_csv(train_path, index=False, sep=";")
+    df_eval.to_csv(eval_path, index=False, sep=";")
+
+    print(f"[HPT Split] Corte: {fecha_corte.date()} (-{trim_days}d)")
+    print(f"[HPT Split] Train CSV: {len(df_train)} registros | hasta {df_train['DIM_PERIODO'].max().date()} → {train_path}")
+    print(f"[HPT Split] Eval  CSV: {len(df_eval)} registros | hasta {fecha_max.date()} → {eval_path}")
+    return train_path, eval_path
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CLI
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -153,6 +185,11 @@ if __name__ == "__main__":
     p_split.add_argument("--historico", type=str, required=True)
     p_split.add_argument("--trim-months", type=int, default=2)
 
+    # prepare-hpt
+    p_hpt = sub.add_parser("prepare-hpt", help="Dividir CSV crudo en historico_hpt_train.csv y historico_hpt_eval.csv")
+    p_hpt.add_argument("--historico", type=str, required=True)
+    p_hpt.add_argument("--trim-days", type=int, default=21)
+
     args = parser.parse_args()
 
     if args.command == "sample":
@@ -170,6 +207,9 @@ if __name__ == "__main__":
 
     elif args.command == "split":
         split_historico(Path(args.historico), args.trim_months)
+
+    elif args.command == "prepare-hpt":
+        prepare_hpt_split(Path(args.historico), args.trim_days)
 
     else:
         parser.print_help()

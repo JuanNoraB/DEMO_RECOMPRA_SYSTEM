@@ -59,13 +59,27 @@ FEATURE_COLUMNS = [
     "score_final",
     "ciclo_dias_mu",
     "Ciclos_ciclo_binario_c",
+    # ── Nuevas features (6) ──────────────────────────────────────────────
+    "dias_desde_ultima_compra",
+    "l_compra_sobre_ciclo",
+    "compras_reales",
+    "ratio_temporal",
+    "ticket_promedio",
+    "n_subcats_familia",
 ]
 
 TIPO_CICLO_COL = "Debug_ciclos_tipo_ciclo_b"
 TIPO_CICLO_CATEGORIES = ["corto", "corto_medio", "largo", "mediano", "no_ciclico"]
 
+# ── Datos crudos ─────────────────────────────────────────────────────────────
+# Sobreescribir con variable de entorno HISTORICO_PATH si se necesita
+HISTORICO_FILE = Path(os.environ.get("HISTORICO_PATH", APP_DIR.parent / "Historico_08122025.csv"))
+
 # ── Archivos de salida por defecto ───────────────────────────────────────────
 FEATURES_TRAIN_FILE = FEATURES_DIR / "features_train.parquet"
+FEATURES_EVAL_FILE = FEATURES_DIR / "features_eval.parquet"
 FEATURES_INFERENCE_FILE = FEATURES_DIR / "features_inference.parquet"
+FEATURES_HPT_TRAIN_FILE = FEATURES_DIR / "features_hpt_train.parquet"
 MODEL_FILE = MODELS_DIR / "fnn_model.pth"
 MODEL_META_FILE = MODELS_DIR / "fnn_meta.json"
+BEST_HPARAMS_FILE = MODELS_DIR / "best_hparams.json"
