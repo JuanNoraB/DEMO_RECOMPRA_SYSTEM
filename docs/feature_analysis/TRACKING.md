@@ -68,7 +68,7 @@ Bitácora de los experimentos realizados y pendientes. Cada paso registra **qué
 
 **Qué se hizo:** Entrenamos FNN y LightGBM con las 11 features pero usando los mejores hiperparámetros del experimento anterior
 
-| Modelo | Antes (20 in) | Después (11 in) | Δ |
+| Modelo | Antes (14 in) | Después (11 in) | Δ |
 |---|---:|---:|:---:|
 | FNN | 0.4319 | **0.4118** | −0.0201 (−4.7%) ❌ |
 | LightGBM | 0.4466 | **0.4425** | −0.0041 (−0.9%) ⚠️ |
