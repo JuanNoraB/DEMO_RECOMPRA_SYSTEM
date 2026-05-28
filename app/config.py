@@ -49,23 +49,29 @@ PARSE_DATES = ["DIM_PERIODO"]
 
 # ── Columnas de features que usa el modelo FNN ───────────────────────────────
 FEATURE_COLUMNS = [
-    "recencia_hl",
-    "freq_baja",
-    "freq_media",
-    "freq_alta",
-    "cv_invertido",
-    "sow_24m",
-    "season_ratio",
-    "score_final",
-    "ciclo_dias_mu",
-    "Ciclos_ciclo_binario_c",
-    # ── Nuevas features (6) ──────────────────────────────────────────────
-    "dias_desde_ultima_compra",
-    "l_compra_sobre_ciclo",
-    "compras_reales",
-    "ratio_temporal",
-    "ticket_promedio",
-    "n_subcats_familia",
+    # ── Top features por gain >= 1% (LightGBM) ─────────────────────────
+    "recencia_hl",                # gain 1.77%
+    "sow_24m",                    # gain 4.72%
+    "score_final",                # gain 6.10%
+    "ciclo_dias_mu",              # gain 12.62%
+    "dias_desde_ultima_compra",   # gain 15.78% (NUEVA)
+    "ticket_promedio",            # gain  6.49% (NUEVA)
+    "n_subcats_familia",          # gain  5.92% (NUEVA)
+    # NOTA: Debug_ciclos_tipo_ciclo_b genera 4 one-hots (tipo_corto_medio,
+    # tipo_largo, tipo_mediano, tipo_no_ciclico) que se añaden automáticamente
+    # → tipo_no_ciclico (40.34%) y tipo_largo (3.17%) son top features.
+    # Total input al modelo: 7 numéricas + 4 one-hots = 11 features.
+    #
+    # ── Comentadas (gain < 1%, contribución marginal) ──────────────────
+    # "freq_baja",                 # gain 0.009%
+    # "freq_media",                # gain 0.008%
+    # "freq_alta",                 # gain 0.019%
+    # "cv_invertido",              # gain 0.562%
+    # "season_ratio",              # gain 0.188%
+    # "Ciclos_ciclo_binario_c",    # gain 0.001%
+    # "l_compra_sobre_ciclo",      # gain 0.727% (NUEVA)
+    # "compras_reales",            # gain 0.490% (NUEVA)
+    # "ratio_temporal",            # gain 0.058% (NUEVA)
 ]
 
 TIPO_CICLO_COL = "Debug_ciclos_tipo_ciclo_b"
