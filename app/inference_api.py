@@ -31,8 +31,9 @@ from config import (
     MODEL_FILE,
     MODEL_META_FILE,
     FEATURE_COLUMNS,
+    SCALER_FILE,
 )
-from train_fnn import _build_features
+from train_fnn import _build_features, FeatureScaler
 
 RELOAD_INTERVAL = int(os.environ.get("RELOAD_INTERVAL", 120))
 KAFKA_BROKER = os.environ.get("KAFKA_BROKER", "kafka-svc:9092")
@@ -60,6 +61,7 @@ def _get_kafka():
 MODEL = None
 META = None
 FEATURES_DF = None
+SCALER = None
 _model_mtime = 0.0
 _features_mtime = 0.0
 _reload_lock = threading.Lock()
@@ -96,10 +98,15 @@ def _load_model():
 
     features_df = pd.read_parquet(features_file)
 
+    scaler = None
+    if SCALER_FILE.exists():
+        scaler = FeatureScaler.load(SCALER_FILE)
+
     with _reload_lock:
         MODEL = model
         META = meta
         FEATURES_DF = features_df
+        SCALER = scaler
         _model_mtime = MODEL_FILE.stat().st_mtime
         _features_mtime = features_file.stat().st_mtime
 
@@ -183,7 +190,9 @@ def predict(cedula: int, top_n: int = 3):
         raise HTTPException(status_code=404, detail=f"Cédula {cedula} no encontrada")
 
     feat_cols_base = [c for c in FEATURE_COLUMNS if c in df_family.columns]
-    X, _ = _build_features(df_family, feat_cols_base)
+    X, feat_cols_built = _build_features(df_family, feat_cols_base)
+    if SCALER is not None:
+        X = SCALER.transform(X, feat_cols_built)
 
     with torch.no_grad():
         probas = torch.sigmoid(MODEL(torch.tensor(X))).numpy()

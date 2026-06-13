@@ -57,6 +57,9 @@ FEATURE_COLUMNS = [
     "dias_desde_ultima_compra",   # gain 15.78% (NUEVA)
     "ticket_promedio",            # gain  6.49% (NUEVA)
     "n_subcats_familia",          # gain  5.92% (NUEVA)
+    "total_compras_12m",           # NUEVA: compras en últimos 12 meses (ventana fija)
+    "avg_unidades",                # NUEVA: promedio unidades por visita (24m)
+    "ratio_ultimo_vs_prom",        # NUEVA: señal de stockpiling (última/promedio)
     # NOTA: Debug_ciclos_tipo_ciclo_b genera 4 one-hots (tipo_corto_medio,
     # tipo_largo, tipo_mediano, tipo_no_ciclico) que se añaden automáticamente
     # → tipo_no_ciclico (40.34%) y tipo_largo (3.17%) son top features.
@@ -89,3 +92,5 @@ FEATURES_HPT_TRAIN_FILE = FEATURES_DIR / "features_hpt_train.parquet"
 MODEL_FILE = MODELS_DIR / "fnn_model.pth"
 MODEL_META_FILE = MODELS_DIR / "fnn_meta.json"
 BEST_HPARAMS_FILE = MODELS_DIR / "best_hparams.json"
+SCALER_FILE = MODELS_DIR / "fnn_scaler.json"
+TRAINING_LOG_FILE = MODELS_DIR.parent / "logs" / "training_runs.jsonl"

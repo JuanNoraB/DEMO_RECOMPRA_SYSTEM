@@ -748,3 +748,69 @@ def compute_seasonality_features(df_family: pd.DataFrame, ciclos_estacionales: p
     
     return pd.DataFrame(resultados)
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  FEATURES DE UNIDADES (CANTIDAD_SUELTA)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def compute_units_features(df_family: pd.DataFrame, fecha_corte: pd.Timestamp) -> pd.DataFrame:
+    """
+    Calcula 3 features basadas en CANTIDAD_SUELTA por subcategoría:
+      - total_compras_12m    : facturas distintas en últimos 12 meses (ventana fija)
+      - avg_unidades         : media de unidades por factura (ventana 24m)
+      - ratio_ultimo_vs_prom : qty última compra / avg_unidades (señal de stockpiling)
+    """
+    df = df_family[df_family["DIM_PERIODO"] <= fecha_corte].copy()
+
+    # 1. total_compras_12m — facturas distintas en últimos 12 meses
+    ventana_12m = fecha_corte - pd.Timedelta(days=365)
+    compras_12m = (
+        df[df["DIM_PERIODO"] >= ventana_12m]
+        .groupby("COD_SUBCATEGORIA")["DIM_FACTURA"]
+        .nunique()
+        .rename("total_compras_12m")
+    )
+
+    # 2. avg_unidades — sum de CANTIDAD_SUELTA por factura, luego media por subcat (24m)
+    ventana_24m = fecha_corte - pd.Timedelta(days=730)
+    qty_per_invoice = (
+        df[df["DIM_PERIODO"] >= ventana_24m]
+        .groupby(["COD_SUBCATEGORIA", "DIM_FACTURA"])["CANTIDAD_SUELTA"]
+        .sum()
+        .reset_index()
+    )
+    avg_unidades = (
+        qty_per_invoice.groupby("COD_SUBCATEGORIA")["CANTIDAD_SUELTA"]
+        .mean()
+        .rename("avg_unidades")
+    )
+
+    # 3. ratio_ultimo_vs_prom — qty en última visita / avg_unidades
+    last_date_per_subcat = df.groupby("COD_SUBCATEGORIA")["DIM_PERIODO"].max()
+    df_last = df.merge(
+        last_date_per_subcat.rename("last_date").reset_index(),
+        on="COD_SUBCATEGORIA",
+    )
+    last_qty = (
+        df_last[df_last["DIM_PERIODO"] == df_last["last_date"]]
+        .groupby("COD_SUBCATEGORIA")["CANTIDAD_SUELTA"]
+        .sum()
+        .rename("last_qty")
+    )
+
+    # Ensamblar
+    result = pd.DataFrame({"COD_SUBCATEGORIA": df["COD_SUBCATEGORIA"].unique()})
+    result = (
+        result
+        .merge(compras_12m.reset_index(), on="COD_SUBCATEGORIA", how="left")
+        .merge(avg_unidades.reset_index(), on="COD_SUBCATEGORIA", how="left")
+        .merge(last_qty.reset_index(), on="COD_SUBCATEGORIA", how="left")
+    )
+    result["total_compras_12m"]    = result["total_compras_12m"].fillna(0).astype(int)
+    result["avg_unidades"]         = result["avg_unidades"].fillna(0.0)
+    result["last_qty"]             = result["last_qty"].fillna(0.0)
+    result["ratio_ultimo_vs_prom"] = (
+        result["last_qty"] / result["avg_unidades"].replace(0, np.nan)
+    ).fillna(1.0).clip(upper=20.0)
+    return result.drop(columns=["last_qty"])
+

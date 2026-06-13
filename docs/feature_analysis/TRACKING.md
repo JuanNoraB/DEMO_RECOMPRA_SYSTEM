@@ -163,6 +163,99 @@ disown
 
 ---
 
+---
+
+## ✅ Paso 6 — Log de ejecución automático en feature engineering
+
+**Qué se hizo:** Se agregó registro automático de tiempo y estadísticas al final de `run_pipeline`.
+
+Cada ejecución del pipeline appends una línea JSON a:
+`data/logs/feature_engineering_runs.jsonl`
+
+**Campos registrados por ejecución:**
+```json
+{
+  "timestamp": "2026-06-10T12:40:00",
+  "duracion_min": 16.5,
+  "duracion_seg": 990.0,
+  "num_familias": 2891,
+  "num_pares_fam_subcat": 279513,
+  "num_features": 18,
+  "features_calculadas": ["recencia_hl", "sow_24m", ...],
+  "target_1_positivos": 16212,
+  "target_0_negativos": 263301,
+  "series_con_ciclo": 12000,
+  "workers": 16,
+  "prediction_window_days": 21,
+  "historico_path": "...",
+  "output_path": "...",
+  "con_filtro": false
+}
+```
+
+**Archivos modificados:** `app/feature_engineering.py` — imports `time/json/datetime` + log al final de `run_pipeline`.
+
+---
+
+## 📋 Estado actual del parquet (verificado Jun 2026)
+
+| Métrica | Valor |
+|---|---:|
+| Familias únicas | 2,891 |
+| Pares familia/subcategoría | 279,513 |
+| Target = 1 (compraron) | 16,212 (5.8%) |
+| Target = 0 (no compraron) | 263,301 (94.2%) |
+| Columnas totales en parquet | 20 |
+
+**Path:** `data/features_store/features_train.parquet`
+
+**Features activas para el modelo** (de `app/config.py:51-75`):
+- 7 numéricas: `recencia_hl`, `sow_24m`, `score_final`, `ciclo_dias_mu`, `dias_desde_ultima_compra`, `ticket_promedio`, `n_subcats_familia`
+- 4 one-hots (auto desde `Debug_ciclos_tipo_ciclo_b`): `tipo_corto_medio`, `tipo_largo`, `tipo_mediano`, `tipo_no_ciclico`
+- **Total: 11 inputs al modelo**
+
+---
+
+## 📋 Comandos de referencia
+
+### Feature Engineering
+
+```bash
+# Sin Docker — todas las familias
+python app/feature_engineering.py --historico Historico_08122025.csv --workers 16
+
+# Sin Docker — con filtro (entrenamiento continuo)
+python app/feature_engineering.py --historico Historico_08122025.csv \
+  --filtro data/nuevas_series.csv --workers 16
+
+# Sin Docker — pipeline completo (features + FNN)
+python app/entrypoint_train.py --historico Historico_08122025.csv --workers 16 --epochs 50 --force
+
+# Con Docker — todas las familias
+docker run --rm -v $(pwd)/data:/data -v $(pwd)/Historico_08122025.csv:/data/raw/historico.csv \
+  fnn-train python feature_engineering.py --historico /data/raw/historico.csv --workers 16
+
+# Con Docker — con filtro
+docker run --rm -v $(pwd)/data:/data -v $(pwd)/Historico_08122025.csv:/data/raw/historico.csv \
+  fnn-train python feature_engineering.py --historico /data/raw/historico.csv \
+  --filtro /data/nuevas_series.csv --workers 16
+```
+
+**Archivo de filtro (entrenamiento continuo):** `data/nuevas_series.csv`
+Formato: CSV con columnas `CODIGO_FAMILIA;COD_SUBCATEGORIA`
+
+### Ver log de ejecuciones
+```bash
+cat data/logs/feature_engineering_runs.jsonl | python3 -c "
+import sys, json
+for line in sys.stdin:
+    r = json.loads(line)
+    print(f'{r[\"timestamp\"]} | {r[\"duracion_min\"]}min | {r[\"num_familias\"]} fam | {r[\"num_pares_fam_subcat\"]} pares | target+={r[\"target_1_positivos\"]}')
+"
+```
+
+---
+
 # Resumen ejecutivo (lo que sabemos hasta hoy)
 
 | Experimento | Precision@3 | Hit Rate@3 | Recall@3 |
@@ -179,3 +272,321 @@ disown
 **Conclusión hasta hoy:** El mejor modelo es **LightGBM con 20 features** (10 originales + 6 añadidas, HPT 80 trials) = **Precision@3 = 0.4466**.
 
 **Para sellar la conclusión faltan los pasos 6, 7 y 8.**
+
+---
+
+# Búsqueda de Hiperparámetros (HPT) — FNN y LightGBM
+
+## Parquets necesarios (generados UNA sola vez, sirven para ambos modelos)
+
+```
+prepare_hpt_split(historico, trim_days=21) genera:
+
+  historico_hpt_train.csv = transacciones desde inicio hasta (fecha_max - 21d)
+  historico_hpt_eval.csv  = historico completo (sin truncar)
+
+Luego run_pipeline sobre historico_hpt_train.csv con prediction_window=21:
+  → features_hpt_train.parquet  ← TRAIN de HPT
+  → features_train.parquet ya existe ← TEST de HPT
+```
+
+## Fechas concretas (ejemplo con fecha_max = 2025-12-01)
+
+```
+Tiempo ──────────────────────────────────────────────────────────►
+         inicio histórico         2025-10-19   2025-11-10   2025-12-01
+              │                       │             │             │
+              ├─── features TRAIN ────┤             │             │
+                                      ├─ target T ──┤             │
+                                      │             │             │
+                                      ├─── features TEST ─────────┤
+                                                    ├─ target T ──┤
+
+features_hpt_train.parquet:
+  FEATURES  → datos hasta 2025-10-19   (fecha_max_truncado - 21d)
+  TARGET    → ¿compró entre 2025-10-19 y 2025-11-09?
+
+features_train.parquet (TEST):
+  FEATURES  → datos hasta 2025-11-10   (fecha_max_completo - 21d)
+  TARGET    → ¿compró entre 2025-11-10 y 2025-12-01?
+```
+
+Código de referencia: `simulation.py:144-146` + `hptuning.py:84-89`
+
+---
+
+## HPT — FNN (`hptuning.py`)
+
+### Split interno durante cada trial
+
+| Rol | Tamaño | Separación temporal |
+|---|---|---|
+| Train (gradiente) | 90% aleatorio de features_hpt_train | No (split random) |
+| Val. interna (early stopping) | 10% aleatorio del mismo parquet | No (mismas fechas) |
+| Test / Eval (métrica del trial) | features_train.parquet completo | Sí (ventana posterior) |
+
+Normalización: Z-score via `FeatureScaler` antes de entrar al modelo.
+
+### Ejecución sin Docker
+
+```bash
+cd "/home/juanchx/Documents/Maestria_IA/desplieje a produccion/labs/Final/app"
+
+# Con preparación de parquets (primera vez)
+python hptuning.py \
+  --prepare \
+  --historico ../data/raw/historico_1000.csv \
+  --trials 100 \
+  --epochs 30
+
+# Solo búsqueda (parquets ya existen)
+python hptuning.py --trials 100 --epochs 30
+```
+
+### Ejecución con Docker
+
+```bash
+cd "/home/juanchx/Documents/Maestria_IA/desplieje a produccion/labs/Final"
+docker build -f Dockerfile.train -t recompra-train .
+
+docker run --rm \
+  -v "$(pwd)/data":/data \
+  -e HISTORICO_PATH=/data/raw/historico_1000.csv \
+  --entrypoint python \
+  recompra-train \
+  hptuning.py --prepare --trials 100 --epochs 30
+```
+
+Resultado: `data/models/best_hparams.json`
+
+---
+
+## HPT — LightGBM (`hptuning_lgbm.py`)
+
+### Split interno durante cada trial
+
+| Rol | Tamaño | Separación temporal |
+|---|---|---|
+| Train | 100% de features_hpt_train (sin split) | — |
+| Test / Eval (métrica del trial) | features_train.parquet completo | Sí (ventana posterior) |
+
+Sin normalización. Sin early stopping (entrena `n_estimators` fijo por trial).
+
+### Ejecución sin Docker
+
+```bash
+cd "/home/juanchx/Documents/Maestria_IA/desplieje a produccion/labs/Final/app"
+
+# Paso 1: generar parquets HPT (mismo comando que FNN — solo una vez)
+python hptuning.py --prepare --historico ../data/raw/historico_1000.csv
+
+# Paso 2: buscar hiperparámetros LightGBM
+python hptuning_lgbm.py --trials 100
+```
+
+### Ejecución con Docker
+
+```bash
+cd "/home/juanchx/Documents/Maestria_IA/desplieje a produccion/labs/Final"
+
+# Parquets deben existir (generar con paso de FNN primero)
+docker run --rm \
+  -v "$(pwd)/data":/data \
+  -e HISTORICO_PATH=/data/raw/historico_1000.csv \
+  --entrypoint python \
+  recompra-train \
+  hptuning_lgbm.py --trials 100
+```
+
+Resultado: `data/models/best_hparams_lgbm.json`
+
+---
+
+## Diferencias FNN vs LightGBM en HPT
+
+| | FNN | LightGBM |
+|---|---|---|
+| Script | `hptuning.py` | `hptuning_lgbm.py` |
+| Parquets | Mismos | Mismos |
+| Fechas | Idénticas | Idénticas |
+| Split interno | 90/10 aleatorio | 100% train (sin split) |
+| Normalización | Sí (Z-score) | No |
+| Early stopping | Sí (best val_loss) | No (n_estimators fijo) |
+| Métrica objetivo | precision@3 | precision@3 |
+| Resultado | `best_hparams.json` | `best_hparams_lgbm.json` |
+
+
+
+# Path archivo de caracteristicas 
+data/features_store/features_train.parquet
+### actualmente 10 jun 2026 tiene los siguiente valores
+- Familias: 2,891 familias | 279,513 pares familia/subcategoría
+- Features activas → @/home/juanchx/Documents/Maestria_IA/desplieje a produccion/labs/Final/app/config.py:51-75
+- 7 numéricas: recencia_hl, sow_24m, score_final, ciclo_dias_mu, dias_desde_ultima_compra, ticket_promedio, n_subcats_familia
+- 4 one-hots (auto desde Debug_ciclos_tipo_ciclo_b): tipo_corto_medio, tipo_largo, tipo_mediano, tipo_no_ciclico
+- Total al modelo: 11 features
+
+# comando par ejecutar calculo de caracterisicas completas sin docker
+cd /home/juanchx/Documents/Maestria_IA/desplieje\ a\ produccion/labs/Final
+python app/feature_engineering.py --historico Historico_08122025.csv --workers 16
+
+# Sin Docker — pipeline completo (features + FNN):
+python app/entrypoint_train.py --historico Historico_08122025.csv --workers 16 --epochs 50 --force
+
+# Con Docker — features:
+docker run --rm -v $(pwd)/data:/data -v $(pwd)/Historico_08122025.csv:/data/raw/historico.csv \
+  fnn-train python feature_engineering.py --historico /data/raw/historico.csv --workers 16
+
+# Con Docker — pipeline completo:
+docker run --rm -v $(pwd)/data:/data -v $(pwd)/Historico_08122025.csv:/data/raw/historico.csv \
+  fnn-train python entrypoint_train.py --historico /data/raw/historico.csv --workers 16 --force
+
+# 3.1 Archivo de filtro para entrenamiento continuo: data/nuevas_series.csv — CSV con columnas CODIGO_FAMILIA;COD_SUBCATEGORIA, Sin Docker — con filtro:
+python app/feature_engineering.py --historico Historico_08122025.csv \
+  --filtro data/nuevas_series.csv --workers 16
+
+# Con Docker — con filtro:
+docker run --rm -v $(pwd)/data:/data -v $(pwd)/Historico_08122025.csv:/data/raw/historico.csv \
+  fnn-train python feature_engineering.py --historico /data/raw/historico.csv \
+  --filtro /data/nuevas_series.csv --workers 16
+-------------------------------------
+### ejecucion FNN TUNNING 
+cd "/home/juanchx/Documents/Maestria_IA/desplieje a produccion/labs/Final/app"
+
+python hptuning.py \
+  --prepare \
+  --historico ../data/raw/historico_1000.csv \
+  --trials 100 \
+  --epochs 30
+  ### Si los parquets ya existen (solo buscar):
+python hptuning.py --trials 100 --epochs 30
+
+### 3. Ejecución con Docker — FNN
+# Desde la raíz del proyecto
+cd "/home/juanchx/Documents/Maestria_IA/desplieje a produccion/labs/Final"
+
+docker build -f Dockerfile.train -t recompra-train .
+
+docker run --rm \
+  -v "$(pwd)/data":/data \
+  -e HISTORICO_PATH=/data/raw/historico_1000.csv \
+  --entrypoint python \
+  recompra-train \
+  hptuning.py --prepare --trials 100 --epochs 30
+
+  ------
+  Nada de dudas, voy directo al código.
+
+Tengo todo. Respondo punto por punto con base en el código.
+
+---
+
+## 1. Script ya implementado para HPT FNN
+
+`@/home/juanchx/Documents/Maestria_IA/desplieje a produccion/labs/Final/app/hptuning.py:1-22`
+
+---
+
+## 2. Ejecución sin Docker — FNN
+
+**Paso 1: generar parquets HPT + buscar hiperparámetros** (todo junto):
+```bash
+cd "/home/juanchx/Documents/Maestria_IA/desplieje a produccion/labs/Final/app"
+
+python hptuning.py \
+  --prepare \
+  --historico ../data/raw/historico_1000.csv \
+  --trials 100 \
+  --epochs 30
+```
+
+**Si los parquets ya existen** (solo buscar):
+```bash
+python hptuning.py --trials 100 --epochs 30
+```
+
+---
+
+## 3. Ejecución con Docker — FNN
+
+```bash
+# Desde la raíz del proyecto
+cd "/home/juanchx/Documents/Maestria_IA/desplieje a produccion/labs/Final"
+
+docker build -f Dockerfile.train -t recompra-train .
+
+docker run --rm \
+  -v "$(pwd)/data":/data \
+  -e HISTORICO_PATH=/data/raw/historico_1000.csv \
+  --entrypoint python \
+  recompra-train \
+  hptuning.py --prepare --trials 100 --epochs 30
+```
+
+---
+
+## 4. Fechas — con ejemplo concreto usando `fecha_max = 2025-12-01`
+
+### 4.1 ¿Train + Validation + Test?
+
+Hay **dos splits** distintos:
+
+| Rol | Qué es | Cómo se genera |
+|---|---|---|
+| **Train (90%)** | Gradiente descend | 90% aleatorio de `features_hpt_train.parquet` |
+| **Val. interna (10%)** | Early stopping | 10% aleatorio del MISMO parquet — **mismas fechas, split random** |
+| **Test / Eval** | Métrica final del trial (precision@3) | `features_train.parquet` — **ventana temporal diferente** |
+
+No hay separación temporal entre train y validación interna. El único split temporal real es train vs test.
+
+---
+
+### 4.2 Datos de TRAIN (y validación interna) — `features_hpt_train.parquet`
+
+```
+prepare_hpt_split corta el CSV:
+  historico_hpt_train.csv = transacciones desde inicio hasta (2025-12-01 - 21d) = hasta 2025-11-09
+
+run_pipeline sobre ese CSV con prediction_window=21:
+  fecha_max del CSV truncado = 2025-11-09
+  fecha_corte_features     = 2025-11-09 - 21d = 2025-10-19
+
+┌─────────────────────────────────────────────────────────┐
+│ FEATURES: datos desde inicio histórico hasta 2025-10-19 │
+│ TARGET:   ¿compró entre 2025-10-19 y 2025-11-09?        │
+└─────────────────────────────────────────────────────────┘
+```
+
+Código: `simulation.py:146-148` + `hptuning.py:87-89`
+
+---
+
+### 4.3 Datos de TEST — `features_train.parquet`
+
+```
+Este parquet ya existe (es el de entrenamiento final):
+  historico completo → fecha_max = 2025-12-01
+  run_pipeline con prediction_window=21:
+  fecha_corte_features = 2025-12-01 - 21d = 2025-11-10
+
+┌─────────────────────────────────────────────────────────┐
+│ FEATURES: datos desde inicio histórico hasta 2025-11-10 │
+│ TARGET:   ¿compró entre 2025-11-10 y 2025-12-01?        │
+└─────────────────────────────────────────────────────────┘
+```
+
+Código: `hptuning.py:57` (`eval_features_path=FEATURES_TRAIN_FILE`)
+
+---
+
+**Resumen visual:**
+```
+Tiempo ──────────────────────────────────────────────────────────►
+         inicio                  2025-10-19   2025-11-10   2025-12-01
+         │                           │             │             │
+         ├──── features TRAIN ───────┤             │             │
+                                     ├── target T ─┤             │
+                                     │             │             │
+                                     ├── features TEST ──────────┤
+                                                   ├── target T ─┤
+```

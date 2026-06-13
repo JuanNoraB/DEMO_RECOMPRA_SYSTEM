@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from sklearn.metrics import classification_report as sk_classification_report
 
 from config import (
     FEATURE_COLUMNS,
@@ -23,7 +24,48 @@ from config import (
     FEATURES_TRAIN_FILE,
     MODEL_FILE,
     MODEL_META_FILE,
+    SCALER_FILE,
+    TRAINING_LOG_FILE,
 )
+
+
+class FeatureScaler:
+    """Z-score normalizer para inputs numéricos del FNN. Excluye one-hots tipo_*."""
+
+    def __init__(self):
+        self.means: dict = {}
+        self.stds:  dict = {}
+
+    def fit(self, X: np.ndarray, col_names: list) -> "FeatureScaler":
+        for i, name in enumerate(col_names):
+            if not name.startswith("tipo_"):
+                self.means[name] = float(np.nanmean(X[:, i]))
+                self.stds[name]  = float(max(float(np.nanstd(X[:, i])), 1e-8))
+        return self
+
+    def transform(self, X: np.ndarray, col_names: list) -> np.ndarray:
+        X = X.copy()
+        for i, name in enumerate(col_names):
+            if name in self.means:
+                X[:, i] = (X[:, i] - self.means[name]) / self.stds[name]
+        return X
+
+    def fit_transform(self, X: np.ndarray, col_names: list) -> np.ndarray:
+        return self.fit(X, col_names).transform(X, col_names)
+
+    def save(self, path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"means": self.means, "stds": self.stds}, f, indent=2)
+
+    @classmethod
+    def load(cls, path: Path) -> "FeatureScaler":
+        with open(path) as f:
+            data = json.load(f)
+        s = cls()
+        s.means = data["means"]
+        s.stds  = data["stds"]
+        return s
 
 
 def _build_features(df: pd.DataFrame, feat_cols_base: list) -> tuple[np.ndarray, list]:
@@ -141,7 +183,12 @@ def run_training(
     df = pd.read_parquet(features_path)
     feat_cols_base = [c for c in FEATURE_COLUMNS if c in df.columns]
     X, feat_cols = _build_features(df, feat_cols_base)
-    print(f"[Train] {len(df)} filas | {df['nucleo'].nunique()} familias | {len(feat_cols)} features")
+    scaler = FeatureScaler()
+    X = scaler.fit_transform(X, feat_cols)
+    if save:
+        scaler.save(SCALER_FILE)
+        print(f"[Train] Scaler guardado: {SCALER_FILE}")
+    print(f"[Train] {len(df)} filas | {df['nucleo'].nunique()} familias | {len(feat_cols)} features (normalizadas)")
     print(f"[Train] Target: {int(df['target'].sum())} positivos / {len(df)} ({df['target'].mean()*100:.1f}%)")
 
     y = df["target"].values.astype(np.float32)
@@ -168,6 +215,7 @@ def run_training(
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
 
     best_loss, best_state = float("inf"), None
+    epoch_losses = []
     t0 = time.time()
 
     for epoch in range(1, epochs + 1):
@@ -187,10 +235,12 @@ def run_training(
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
         if epoch % 10 == 0 or epoch == 1:
-            print(f"  Epoch {epoch:3d}/{epochs} | loss={loss.item():.4f} | es_loss={es_loss:.4f}")
+            print(f"  Epoch {epoch:3d}/{epochs} | train_loss={loss.item():.4f} | val_loss={es_loss:.4f}")
+            epoch_losses.append({"epoch": epoch, "train_loss": round(loss.item(), 6), "val_loss": round(es_loss, 6)})
 
+    training_time = time.time() - t0
     model.load_state_dict(best_state)
-    print(f"[Train] {time.time()-t0:.1f}s | best_es_loss={best_loss:.4f}")
+    print(f"[Train] {training_time:.1f}s | best_val_loss={best_loss:.4f}")
 
     # ── Evaluación Top-K ─────────────────────────────────────────────────────
     if eval_features_path is not None:
@@ -198,6 +248,7 @@ def run_training(
     else:
         df_eval = df
     X_eval_full, _ = _build_features(df_eval, feat_cols_base)
+    X_eval_full = scaler.transform(X_eval_full, feat_cols)
     df_eval_aug = df_eval.copy()
     for i, col in enumerate(feat_cols):
         df_eval_aug[col] = X_eval_full[:, i]
@@ -206,6 +257,22 @@ def run_training(
     print(f"[Eval]  Precision@3: {topk_metrics['precision@k']:.4f} ({topk_metrics['precision@k']*100:.1f}%)")
     print(f"[Eval]  Hit Rate@3:  {topk_metrics['hit_rate@k']:.4f} ({topk_metrics['hit_rate@k']*100:.1f}%)")
     print(f"[Eval]  Recall@3:    {topk_metrics['recall@k']:.4f} ({topk_metrics['recall@k']*100:.1f}%)")
+
+    # ── Classification report (umbral 0.5) ───────────────────────────────────
+    with torch.no_grad():
+        eval_probas = torch.sigmoid(
+            model(torch.tensor(X_eval_full).to(device))
+        ).cpu().numpy().ravel()
+    y_eval_true = df_eval["target"].values
+    y_eval_pred = (eval_probas >= 0.5).astype(int)
+    cls_report_dict = sk_classification_report(
+        y_eval_true, y_eval_pred, output_dict=True, zero_division=0
+    )
+    cls_report_text = sk_classification_report(
+        y_eval_true, y_eval_pred, zero_division=0
+    )
+    print("[Eval]  Classification Report (umbral=0.5):")
+    print(cls_report_text)
 
     meta = {
         "timestamp": datetime.now().isoformat(),
@@ -221,12 +288,49 @@ def run_training(
         "recall@3": topk_metrics["recall@k"],
         "n_families_eval": topk_metrics["n_families"],
     }
+
     if save:
         MODEL_FILE.parent.mkdir(parents=True, exist_ok=True)
         torch.save(model.state_dict(), MODEL_FILE)
         with open(MODEL_META_FILE, "w") as f:
             json.dump(meta, f, indent=2)
         print(f"[Train] Guardado: {MODEL_FILE}")
+
+        # ── Training log completo ─────────────────────────────────────────
+        n_pos_train = int(y[idx[:s]].sum())
+        run_log = {
+            "timestamp": meta["timestamp"],
+            "model": "FNN",
+            "n_features": len(feat_cols),
+            "feature_columns": feat_cols,
+            "hyperparameters": {
+                "lr": lr, "hidden_dims": _hidden,
+                "dropout": dropout, "activation": activation,
+                "epochs": epochs, "pos_weight": round(pw, 4),
+            },
+            "training_time_seconds": round(training_time, 2),
+            "epoch_losses": epoch_losses,
+            "best_val_loss": round(best_loss, 6),
+            "topk_metrics": {
+                "precision@3": round(topk_metrics["precision@k"], 4),
+                "recall@3":    round(topk_metrics["recall@k"], 4),
+                "hit_rate@3":  round(topk_metrics["hit_rate@k"], 4),
+                "n_families":  topk_metrics["n_families"],
+            },
+            "classification_report": cls_report_dict,
+            "data": {
+                "n_train": int(s),
+                "n_val_es": int(len(X) - s),
+                "n_eval": len(df_eval),
+                "n_positives_train": n_pos_train,
+                "pct_positivos_train": round(n_pos_train / s * 100, 2),
+            },
+        }
+        TRAINING_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(TRAINING_LOG_FILE, "a") as lf:
+            lf.write(json.dumps(run_log, ensure_ascii=False) + "\n")
+        print(f"[Train] Log guardado: {TRAINING_LOG_FILE}")
+
     return model, meta
 
 
@@ -252,8 +356,11 @@ def run_inference(features_path=None, output_path=None):
 
     df = pd.read_parquet(features_path)
     feat_cols_base = [c for c in FEATURE_COLUMNS if c in df.columns]
-    X, _ = _build_features(df, feat_cols_base)
+    X, feat_cols_built = _build_features(df, feat_cols_base)
     feat_cols = meta["feature_columns"]  # columnas guardadas en training (incluye one-hot)
+    if SCALER_FILE.exists():
+        _scaler = FeatureScaler.load(SCALER_FILE)
+        X = _scaler.transform(X, feat_cols_built)
 
     with torch.no_grad():
         probas = torch.sigmoid(model(torch.tensor(X).to(device))).cpu().numpy()

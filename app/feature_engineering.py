@@ -17,8 +17,11 @@ El script:
 """
 from __future__ import annotations
 
+import json
 import os
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -27,6 +30,7 @@ import pandas as pd
 
 from config import (
     FEATURES_TRAIN_FILE,
+    HISTORICO_FILE,
     RAW_DTYPES,
     NUMERIC_COLUMNS,
     FEATURE_COLUMNS,
@@ -38,6 +42,7 @@ from features import (
     compute_frequency_features,
     compute_sow_features,
     compute_seasonality_features,
+    compute_units_features,
 )
 
 
@@ -165,6 +170,10 @@ def compute_features_for_family(
         ciclos_estacionales=ciclos_estacionales,
         fecha_corte=fecha_corte,
     )
+    units_features = compute_units_features(
+        df_family=df_family,
+        fecha_corte=fecha_corte,
+    )
 
     # ── Merge de todas las features ──────────────────────────────────────
     features_final = recency_features.merge(freq_features, on="COD_SUBCATEGORIA", how="left")
@@ -172,6 +181,7 @@ def compute_features_for_family(
     features_final = features_final.merge(seasonality_features, on="COD_SUBCATEGORIA", how="left")
     features_final = features_final.merge(ciclos_estacionales, on="COD_SUBCATEGORIA", how="left")
     features_final = features_final.merge(ciclos_debug, on="COD_SUBCATEGORIA", how="left")
+    features_final = features_final.merge(units_features, on="COD_SUBCATEGORIA", how="left")
     # Merge ticket_promedio desde subcat_agg
     features_final = features_final.merge(
         subcat_agg[["COD_SUBCATEGORIA", "ticket_promedio"]],
@@ -209,6 +219,9 @@ def compute_features_for_family(
         "ratio_temporal",            # de seasonality_features (ratio sin plateau)
         "ticket_promedio",           # NUEVA: venta_total / facturas_unicas
         "n_subcats_familia",         # NUEVA: nivel familia
+        "total_compras_12m",         # NUEVA: compras en últimos 12 meses (ventana fija)
+        "avg_unidades",              # NUEVA: promedio unidades por visita (24m)
+        "ratio_ultimo_vs_prom",      # NUEVA: señal de stockpiling
     ]
 
     rename_map = {}
@@ -260,6 +273,16 @@ def compute_features_for_family(
         )
     else:
         features_final["ciclo_dias_mu"] = 0.0
+
+    # ── Eliminar columnas lista/array (no escalares, generadas por calcular_ciclos) ─
+    _list_cols = [
+        c for c in features_final.columns
+        if features_final[c].dtype == object
+        and len(features_final[c].dropna()) > 0
+        and isinstance(features_final[c].dropna().iloc[0], (list, np.ndarray))
+    ]
+    if _list_cols:
+        features_final = features_final.drop(columns=_list_cols)
 
     return features_final
 
@@ -334,6 +357,7 @@ def run_pipeline(
         n_workers: Procesos paralelos. None = cpu_count.
         output_path: Path del parquet de salida. None = FEATURES_TRAIN_FILE.
     """
+    t_pipeline_start = time.time()
     if n_workers is None:
         n_workers = os.cpu_count()
     if output_path is None:
@@ -394,11 +418,9 @@ def run_pipeline(
 
     combined = pd.concat(results, ignore_index=True)
 
-    # 5. Solo columnas esenciales (incluye tipo_ciclo para one-hot en training)
-    from config import TIPO_CICLO_COL
-    keep = ["nucleo", "COD_SUBCATEGORIA"] + FEATURE_COLUMNS + [TIPO_CICLO_COL] + ["target"]
-    keep = [c for c in keep if c in combined.columns]
-    new_features = combined[keep]
+    # 5. Parquet gordo: conservar TODAS las columnas calculadas.
+    # Cada modelo elige sus features desde FEATURE_COLUMNS al cargar.
+    new_features = combined
 
     # 6. Filtrar por series específicas si había filtro de subcategorías
     if filtro_path is not None:
@@ -431,9 +453,54 @@ def run_pipeline(
     result.to_parquet(output_path, index=False)
     print(f"[Pipeline] Guardado: {output_path}")
 
+    # Metadata necesaria para add_feature_columns (fecha_corte reproducible)
+    _run_meta = {
+        "fecha_corte": str(fecha_corte_features.date()),
+        "prediction_window_days": prediction_window,
+        "historico_path": str(historico_path),
+    }
+    _meta_path = output_path.with_suffix(".meta.json")
+    with open(_meta_path, "w") as _mf:
+        json.dump(_run_meta, _mf, indent=2)
+
     n_pos = int(result["target"].sum()) if "target" in result.columns else 0
+    n_neg = len(result) - n_pos
     print(f"[Pipeline] {len(result)} filas | {result['nucleo'].nunique()} familias | "
           f"Target: {n_pos} positivos ({n_pos/len(result)*100:.1f}%)")
+
+    # ── Log de ejecución ─────────────────────────────────────────────────
+    duracion_s = time.time() - t_pipeline_start
+    feature_cols = [c for c in result.columns if c not in ("nucleo", "COD_SUBCATEGORIA", "target")]
+    series_con_ciclo = 0
+    if "Debug_ciclos_tipo_ciclo_b" in result.columns:
+        series_con_ciclo = int((result["Debug_ciclos_tipo_ciclo_b"] != "no_ciclico").sum())
+
+    run_log = {
+        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "duracion_min": round(duracion_s / 60, 2),
+        "duracion_seg": round(duracion_s, 1),
+        "num_familias": int(result["nucleo"].nunique()),
+        "num_pares_fam_subcat": len(result),
+        "num_features": len(feature_cols),
+        "features_calculadas": feature_cols,
+        "target_1_positivos": n_pos,
+        "target_0_negativos": n_neg,
+        "series_con_ciclo": series_con_ciclo,
+        "workers": n_workers,
+        "prediction_window_days": prediction_window,
+        "historico_path": str(historico_path),
+        "output_path": str(output_path),
+        "con_filtro": filtro_path is not None,
+    }
+
+    logs_dir = output_path.parent.parent / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_file = logs_dir / "feature_engineering_runs.jsonl"
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(run_log, ensure_ascii=False) + "\n")
+    print(f"[Pipeline] Log guardado: {log_file}")
+    print(f"[Pipeline] Duración total: {duracion_s/60:.1f} min ({duracion_s:.0f}s)")
+
     return result
 
 
