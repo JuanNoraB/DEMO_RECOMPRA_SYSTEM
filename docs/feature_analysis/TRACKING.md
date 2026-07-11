@@ -419,12 +419,6 @@ Resultado: `data/models/best_hparams_lgbm.json`
 
 # Path archivo de caracteristicas 
 data/features_store/features_train.parquet
-### actualmente 10 jun 2026 tiene los siguiente valores
-- Familias: 2,891 familias | 279,513 pares familia/subcategoría
-- Features activas → @/home/juanchx/Documents/Maestria_IA/desplieje a produccion/labs/Final/app/config.py:51-75
-- 7 numéricas: recencia_hl, sow_24m, score_final, ciclo_dias_mu, dias_desde_ultima_compra, ticket_promedio, n_subcats_familia
-- 4 one-hots (auto desde Debug_ciclos_tipo_ciclo_b): tipo_corto_medio, tipo_largo, tipo_mediano, tipo_no_ciclico
-- Total al modelo: 11 features
 
 # comando par ejecutar calculo de caracterisicas completas sin docker
 cd /home/juanchx/Documents/Maestria_IA/desplieje\ a\ produccion/labs/Final
