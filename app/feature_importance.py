@@ -8,7 +8,7 @@ Qué hace:
   4. Opcionalmente compara distribuciones: compradores (target=1) vs no-compradores (target=0)
   5. Guarda CSV en docs/feature_analysis/feature_summary.csv
   6. Guarda log JSONL en data/logs/feature_importance_runs.jsonl (append)
-  7. Guarda gráfico PNG en docs/feature_analysis/feature_importance.png
+  7. Guarda gráficoS PNG en docs/feature_analysis/feature_importance.png
 
 GAIN:  reducción total de pérdida al usar una feature para hacer un corte.
        Alta ganancia = feature discrimina bien compradores vs no-compradores.
@@ -172,6 +172,17 @@ def _default_params(n_pos: int, n_total: int) -> dict:
     }
 
 
+def select_until_threshold(result_df: pd.DataFrame, threshold: float) -> pd.DataFrame:
+    """Devuelve las features hasta la primera fila donde acum_gain_pct >= threshold (inclusive)."""
+    reached = result_df["acum_gain_pct"] >= threshold
+
+    if not reached.any():
+        return result_df.copy()
+
+    last_idx = reached.idxmax()
+    return result_df.loc[:last_idx].copy()
+
+
 def main():
     t_start = time.time()
     parser = argparse.ArgumentParser(description="Feature importance con LightGBM")
@@ -247,12 +258,10 @@ def main():
     print(f"[FeatImportance] Top-3 acumulan: {result_df.head(3)['gain_pct'].sum():.1f}% del gain")
     print(f"[FeatImportance] Top-5 acumulan: {result_df.head(5)['gain_pct'].sum():.1f}% del gain")
 
-    for threshold in [80, 90]:
-        top_t = result_df[result_df["acum_gain_pct"] <= threshold]
-        if len(top_t) == 0:
-            top_t = result_df.head(1)
+    for threshold in [80, 90, 95]:
+        top_t = select_until_threshold(result_df, threshold)
         feats = list(top_t["feature"])
-        print(f"\n[FeatImportance] Features que explican {threshold}% del gain ({len(feats)} features):")
+        print(f"\n[FeatImportance] Features que acumulan al menos {threshold}% del gain ({len(feats)} features):")
         print(f"  {feats}")
     print()
 
