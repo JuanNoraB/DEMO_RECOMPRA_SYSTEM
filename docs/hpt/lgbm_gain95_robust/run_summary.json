@@ -1,0 +1,101 @@
+{
+  "timestamp": "2026-07-14T11:20:39.057066",
+  "experiment_name": "lgbm_gain95_robust",
+  "model": "LightGBM",
+  "search_method": "parallel_successive_halving_random_nested",
+  "objective": "maximize_pr_auc_validation",
+  "feature_set": "gain95",
+  "train_parquet": "data/features_store/features_train_all_1to4.parquet",
+  "n_rows_total": 2548900,
+  "n_rows_train": 2039120,
+  "n_rows_validation": 509780,
+  "target_positive_rate_total": 0.20000000298023224,
+  "split": {
+    "type": "row_stratified",
+    "validation_size": 0.2,
+    "seed": 42
+  },
+  "base_feature_columns": [
+    "Ciclos_cv",
+    "ciclo_dias_mu",
+    "total_compras_12m",
+    "dias_desde_ultima_compra",
+    "Sow_transacciones_netas",
+    "ticket_promedio",
+    "n_subcats_familia",
+    "avg_unidades"
+  ],
+  "model_feature_columns": [
+    "Ciclos_cv",
+    "ciclo_dias_mu",
+    "total_compras_12m",
+    "dias_desde_ultima_compra",
+    "Sow_transacciones_netas",
+    "ticket_promedio",
+    "n_subcats_familia",
+    "avg_unidades"
+  ],
+  "excluded_columns": [],
+  "cycle_onehot": false,
+  "candidate_count": 500,
+  "best_candidate_id": 282,
+  "best_trial_number": 282,
+  "best_params": {
+    "objective": "binary",
+    "metric": "None",
+    "boosting_type": "gbdt",
+    "verbosity": -1,
+    "deterministic": true,
+    "force_col_wise": true,
+    "seed": 324,
+    "feature_fraction_seed": 324,
+    "bagging_seed": 324,
+    "data_random_seed": 324,
+    "learning_rate": 0.025205322759118676,
+    "num_leaves": 145,
+    "max_depth": 10,
+    "min_data_in_leaf": 88,
+    "feature_fraction": 0.8122071077788415,
+    "bagging_fraction": 0.6783903971196462,
+    "bagging_freq": 1,
+    "lambda_l1": 0.04493149792593564,
+    "lambda_l2": 1.4095093601014986e-06,
+    "min_gain_to_split": 0.6714035241730318,
+    "max_bin": 127,
+    "scale_pos_weight": 1.0,
+    "num_threads": 16,
+    "num_boost_round": 560
+  },
+  "best_metrics_validation": {
+    "pr_auc": 0.5418120982477936,
+    "roc_auc": 0.7775506546966061,
+    "f1": 0.5155668245813038,
+    "precision": 0.47172545157062734,
+    "recall": 0.5683922476362352,
+    "lift_at_10": 3.2707246650647424,
+    "threshold_f1": 0.25533967848735095,
+    "base_rate": 0.20000000298023224,
+    "top10_positive_rate": 0.6541449427604675
+  },
+  "round_fractions": [
+    0.2,
+    0.4,
+    0.7,
+    1.0
+  ],
+  "round_rounds": [
+    128,
+    320,
+    700,
+    1600
+  ],
+  "survivors": [
+    100,
+    25,
+    8,
+    1
+  ],
+  "workers": 8,
+  "threads_per_worker": 16,
+  "duration_seconds": 62.75
+}

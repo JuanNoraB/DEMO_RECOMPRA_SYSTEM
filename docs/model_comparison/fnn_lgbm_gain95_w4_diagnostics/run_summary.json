@@ -1,0 +1,162 @@
+{
+  "timestamp": "2026-07-14T15:12:44.472398",
+  "experiment_name": "fnn_lgbm_gain95_w4_diagnostics",
+  "analysis_protocol": "compare_saved_final_predictions_on_external_W4",
+  "w4_is_external_test": true,
+  "retrained_models": false,
+  "repeated_inference": false,
+  "n_w4": 929768,
+  "positive_rate_w4": 0.13552628182514348,
+  "thresholds": {
+    "FNN": 0.40895265340805054,
+    "LightGBM": 0.25533967848735095
+  },
+  "metrics": {
+    "FNN": {
+      "model": "FNN",
+      "threshold": 0.40895265340805054,
+      "n_w4": 929768,
+      "support_target_0": 803760,
+      "support_target_1": 126008,
+      "predicted_target_0": 739691,
+      "predicted_target_1": 190077,
+      "pr_auc": 0.46296316390057896,
+      "roc_auc": 0.7860937802803539,
+      "precision_target_0": 0.9263124737221353,
+      "recall_target_0": 0.8524746192893401,
+      "f1_target_0": 0.8878610334892394,
+      "precision_target_1": 0.37617386638046685,
+      "recall_target_1": 0.5674401625293632,
+      "f1_target_1": 0.45242260784282706,
+      "tn": 685185,
+      "fp": 118575,
+      "fn": 54506,
+      "tp": 71502,
+      "base_rate": 0.13552628182514348,
+      "top10_positive_rate": 0.516686922572249,
+      "lift_at_10": 3.812448151118618
+    },
+    "LightGBM": {
+      "model": "LightGBM",
+      "threshold": 0.25533967848735095,
+      "n_w4": 929768,
+      "support_target_0": 803760,
+      "support_target_1": 126008,
+      "predicted_target_0": 733115,
+      "predicted_target_1": 196653,
+      "pr_auc": 0.46490074525721925,
+      "roc_auc": 0.786882466349534,
+      "precision_target_0": 0.9273892909025188,
+      "recall_target_0": 0.8458781228227331,
+      "f1_target_0": 0.8847603090687272,
+      "precision_target_1": 0.3700731745765384,
+      "recall_target_1": 0.5775506317059235,
+      "f1_target_1": 0.4510988312811279,
+      "tn": 679883,
+      "fp": 123877,
+      "fn": 53232,
+      "tp": 72776,
+      "base_rate": 0.13552628182514348,
+      "top10_positive_rate": 0.5183217354829689,
+      "lift_at_10": 3.8245108513469703
+    }
+  },
+  "top3": {
+    "FNN": {
+      "precision_at_3": 0.4640750706675364,
+      "recall_at_3": 0.6522249657606205,
+      "hit_rate_at_3": 0.8740826810176126,
+      "n_groups_evaluated": 49056
+    },
+    "LightGBM": {
+      "precision_at_3": 0.464414818438791,
+      "recall_at_3": 0.6530099461875166,
+      "hit_rate_at_3": 0.8748980756686237,
+      "n_groups_evaluated": 49056
+    },
+    "overlap": {
+      "n_groups_compared": 49056,
+      "mean_common_items": 2.857937866927593,
+      "mean_jaccard": 0.9292380136986301
+    }
+  },
+  "agreement": [
+    {
+      "category": "Ambos aciertan",
+      "count": 745299,
+      "percentage": 0.8015967424131611
+    },
+    {
+      "category": "Solo FNN acierta",
+      "count": 11388,
+      "percentage": 0.012248216759449669
+    },
+    {
+      "category": "Solo LightGBM acierta",
+      "count": 7360,
+      "percentage": 0.007915953227041585
+    },
+    {
+      "category": "Ambos fallan",
+      "count": 165721,
+      "percentage": 0.17823908760034762
+    }
+  ],
+  "agreement_by_target": [
+    {
+      "target": 0,
+      "agreement_category": "Ambos aciertan",
+      "count": 674880,
+      "percentage_within_target": 0.8396536279486414
+    },
+    {
+      "target": 0,
+      "agreement_category": "Ambos fallan",
+      "count": 113572,
+      "percentage_within_target": 0.14130088583656814
+    },
+    {
+      "target": 0,
+      "agreement_category": "Solo FNN acierta",
+      "count": 10305,
+      "percentage_within_target": 0.012820991340698716
+    },
+    {
+      "target": 0,
+      "agreement_category": "Solo LightGBM acierta",
+      "count": 5003,
+      "percentage_within_target": 0.006224494874091768
+    },
+    {
+      "target": 1,
+      "agreement_category": "Ambos aciertan",
+      "count": 70419,
+      "percentage_within_target": 0.5588454701288808
+    },
+    {
+      "target": 1,
+      "agreement_category": "Ambos fallan",
+      "count": 52149,
+      "percentage_within_target": 0.41385467589359404
+    },
+    {
+      "target": 1,
+      "agreement_category": "Solo FNN acierta",
+      "count": 1083,
+      "percentage_within_target": 0.00859469240048251
+    },
+    {
+      "target": 1,
+      "agreement_category": "Solo LightGBM acierta",
+      "count": 2357,
+      "percentage_within_target": 0.018705161577042727
+    }
+  ],
+  "binary_prediction_agreement": 0.9798358300135087,
+  "probability_correlation_pearson": 0.9808839537329552,
+  "duration_seconds": 9.15,
+  "source_experiments": {
+    "FNN": "fnn_gain95_w4_final",
+    "LightGBM": "lgbm_gain95_w4_final"
+  }
+}
