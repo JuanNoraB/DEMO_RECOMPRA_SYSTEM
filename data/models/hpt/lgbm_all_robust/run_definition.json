@@ -1,0 +1,62 @@
+{
+  "schema_version": 3,
+  "search_method": "parallel_successive_halving_random_nested",
+  "train_parquet": "/home/juan.brito__yachaytech.edu.ec/home/Final/data/features_store/features_train_all_1to4.parquet",
+  "feature_set": "all",
+  "candidates": 500,
+  "val_size": 0.2,
+  "seed": 42,
+  "round_fractions": [
+    0.2,
+    0.4,
+    0.7,
+    1.0
+  ],
+  "round_rounds": [
+    128,
+    320,
+    700,
+    1600
+  ],
+  "survivors": [
+    100,
+    25,
+    8,
+    1
+  ],
+  "final_early_stopping": 100,
+  "feature_columns": [
+    "recencia_hl",
+    "freq_baja",
+    "freq_media",
+    "freq_alta",
+    "cv_invertido",
+    "sow_24m",
+    "season_ratio",
+    "score_final",
+    "dias_desde_ultima_compra",
+    "l_compra_sobre_ciclo",
+    "compras_reales",
+    "ratio_temporal",
+    "ticket_promedio",
+    "n_subcats_familia",
+    "total_compras_12m",
+    "avg_unidades",
+    "ratio_ultimo_vs_prom",
+    "Debug_ciclos_ciclo_binario",
+    "Ciclos_cv",
+    "Ciclos_ciclo_binario_c",
+    "Recencia_recencia",
+    "Freq_periodo_revision",
+    "Sow_transacciones_netas",
+    "Seasonality_compras_actual",
+    "Seasonality_compras_pasado",
+    "ciclo_dias_mu",
+    "tipo_corto_medio",
+    "tipo_largo",
+    "tipo_mediano",
+    "tipo_no_ciclico"
+  ],
+  "workers": 8,
+  "threads_per_worker": 16
+}

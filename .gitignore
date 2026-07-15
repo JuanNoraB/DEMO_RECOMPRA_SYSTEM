@@ -1,6 +1,38 @@
-data/*
-Historico_08122025.csv
+# Bloqueos generales
+data/**
 *.csv
 *.parquet
 *.pkl
-*.log
+
+# Permitir recorrer únicamente estas rutas
+!data/
+!data/models/
+!data/models/hpt/
+!data/models/final/
+!data/logs/
+
+# Todos los archivos DIRECTOS de estas carpetas
+# El /* no habilita archivos dentro de subcarpetas.
+
+!data/models/hpt/lgbm_gain95_robust/
+!data/models/hpt/lgbm_gain95_robust/*
+
+!data/models/hpt/lgbm_all_robust/
+!data/models/hpt/lgbm_all_robust/*
+
+!data/models/final/lgbm_gain95_w4_final/
+!data/models/final/lgbm_gain95_w4_final/*
+
+!data/models/final/lgbm_all_w4_final/
+!data/models/final/lgbm_all_w4_final/*
+
+!data/logs/
+!data/logs/*
+
+# Documentación final
+!docs/final/lgbm_gain95_w4_final/*
+!docs/final/lgbm_all_w4_final/*
+
+# Volver a bloquear únicamente estos dos archivos
+data/models/final/lgbm_gain95_w4_final/eval_predictions.parquet
+data/models/final/lgbm_all_w4_final/eval_predictions.parquet

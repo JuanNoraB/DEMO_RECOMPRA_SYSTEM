@@ -1,0 +1,40 @@
+{
+  "schema_version": 3,
+  "search_method": "parallel_successive_halving_random_nested",
+  "train_parquet": "/home/juan.brito__yachaytech.edu.ec/home/Final/data/features_store/features_train_all_1to4.parquet",
+  "feature_set": "gain95",
+  "candidates": 500,
+  "val_size": 0.2,
+  "seed": 42,
+  "round_fractions": [
+    0.2,
+    0.4,
+    0.7,
+    1.0
+  ],
+  "round_rounds": [
+    128,
+    320,
+    700,
+    1600
+  ],
+  "survivors": [
+    100,
+    25,
+    8,
+    1
+  ],
+  "final_early_stopping": 100,
+  "feature_columns": [
+    "Ciclos_cv",
+    "ciclo_dias_mu",
+    "total_compras_12m",
+    "dias_desde_ultima_compra",
+    "Sow_transacciones_netas",
+    "ticket_promedio",
+    "n_subcats_familia",
+    "avg_unidades"
+  ],
+  "workers": 8,
+  "threads_per_worker": 16
+}
