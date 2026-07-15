@@ -1,6 +1,9 @@
 pandas>=2.0
 numpy>=1.24
 pyarrow>=12.0
+duckdb>=1.1
+matplotlib>=3.8
+psutil>=5.9
 lightgbm>=4.0
 fastapi>=0.110
 uvicorn>=0.29
@@ -9,3 +12,4 @@ prometheus-client>=0.20
 optuna>=3.0
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch
+
