@@ -1,0 +1,22 @@
+{
+  "means": {
+    "Ciclos_cv": 784.1309204101562,
+    "ciclo_dias_mu": 84.45069122314453,
+    "total_compras_12m": 1.1592378616333008,
+    "dias_desde_ultima_compra": 395.7951354980469,
+    "Sow_transacciones_netas": 22.892229080200195,
+    "ticket_promedio": 12.023189544677734,
+    "n_subcats_familia": 20.792787551879883,
+    "avg_unidades": 9.06047248840332
+  },
+  "stds": {
+    "Ciclos_cv": 410.31744384765625,
+    "ciclo_dias_mu": 158.5736846923828,
+    "total_compras_12m": 2.579228162765503,
+    "dias_desde_ultima_compra": 316.1803894042969,
+    "Sow_transacciones_netas": 53.5705451965332,
+    "ticket_promedio": 17.372095108032227,
+    "n_subcats_familia": 22.077884674072266,
+    "avg_unidades": 22.287052154541016
+  }
+}

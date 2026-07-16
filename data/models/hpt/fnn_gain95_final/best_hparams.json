@@ -1,0 +1,15 @@
+{
+  "candidate_id": 788,
+  "lr": 0.001265614220539916,
+  "dropout": 0.14555009746691527,
+  "activation": "relu",
+  "hidden_dims": [
+    256,
+    128,
+    128,
+    32
+  ],
+  "batch_size": 16384,
+  "weight_decay": 6.455525951233068e-07,
+  "pos_weight": 2.0
+}

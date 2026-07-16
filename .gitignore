@@ -36,3 +36,47 @@ data/**
 # Volver a bloquear únicamente estos dos archivos
 data/models/final/lgbm_gain95_w4_final/eval_predictions.parquet
 data/models/final/lgbm_all_w4_final/eval_predictions.parquet
+
+
+# ── Experimentos FNN: optimización de hiperparámetros ────────────────────────
+
+!data/models/hpt/fnn_gain95_final/
+!data/models/hpt/fnn_gain95_final/*
+
+!data/models/hpt/fnn_all_final/
+!data/models/hpt/fnn_all_final/*
+
+
+# ── Experimentos FNN: entrenamiento final y evaluación W4 ───────────────────
+
+!data/models/final/fnn_gain95_w4_final/
+!data/models/final/fnn_gain95_w4_final/*
+
+!data/models/final/fnn_all_w4_final/
+!data/models/final/fnn_all_w4_final/*
+
+
+# ── Documentación, métricas, CSV y gráficas FNN ─────────────────────────────
+
+!docs/hpt/fnn_gain95_final/
+!docs/hpt/fnn_gain95_final/*
+
+!docs/hpt/fnn_all_final/
+!docs/hpt/fnn_all_final/*
+
+!docs/final/fnn_gain95_w4_final/
+!docs/final/fnn_gain95_w4_final/*
+
+!docs/final/fnn_all_w4_final/
+!docs/final/fnn_all_w4_final/*
+
+
+# ── Mantener fuera archivos binarios o demasiado pesados ────────────────────
+
+data/models/hpt/fnn_gain95_final/*.pth
+data/models/hpt/fnn_all_final/*.pth
+data/models/final/fnn_gain95_w4_final/*.pth
+data/models/final/fnn_all_w4_final/*.pth
+
+data/models/final/fnn_gain95_w4_final/eval_predictions.parquet
+data/models/final/fnn_all_w4_final/eval_predictions.parquet
