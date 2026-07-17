@@ -1,7 +1,11 @@
 """EDA simple de intervalos de compra para churn a nivel cliente.
 
 Lee solo CODIGO_FAMILIA y DIM_PERIODO, conserva los dos anios mas
-recientes del historico y genera una tabla estadistica sencilla.
+recientes del historico y genera:
+1. Una tabla estadistica general.
+2. Una tabla por terciles excluyentes (P0-P33, P33-P66 y P66-P100).
+3. Tres graficos simples de distribucion.
+
 No construye el target ni entrena modelos.
 """
 
@@ -11,7 +15,12 @@ import argparse
 import time
 from pathlib import Path
 
+import matplotlib
+import numpy as np
 import pandas as pd
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -40,6 +49,58 @@ def summarize(series: pd.Series, variable: str) -> dict[str, float | int | str]:
         "p50": float(values.quantile(0.50)),
         "p90": float(values.quantile(0.90)),
     }
+
+
+def summarize_terciles(series: pd.Series, variable: str) -> list[dict[str, float | int | str]]:
+    values = pd.to_numeric(series, errors="coerce").dropna()
+    p33 = float(values.quantile(1 / 3))
+    p66 = float(values.quantile(2 / 3))
+
+    grupos = [
+        (f"P0-P33 (<= {p33:.2f})", values <= p33),
+        (f"P33-P66 ({p33:.2f}, {p66:.2f}]", (values > p33) & (values <= p66)),
+        (f"P66-P100 (> {p66:.2f})", values > p66),
+    ]
+
+    rows = []
+    for tramo, mask in grupos:
+        group = values.loc[mask]
+        rows.append(
+            {
+                "variable": variable,
+                "tramo": tramo,
+                "clientes": int(group.size),
+                "media": float(group.mean()),
+                "desviacion_std": float(group.std(ddof=0)),
+                "varianza": float(group.var(ddof=0)),
+            }
+        )
+    return rows
+
+
+def save_distribution_plot(
+    series: pd.Series,
+    title: str,
+    xlabel: str,
+    output_path: Path,
+    bin_width: int = 5,
+) -> None:
+    values = pd.to_numeric(series, errors="coerce").dropna()
+    upper = float(values.quantile(0.98))
+    visible = values[values <= upper]
+
+    max_value = max(bin_width, int(np.ceil(upper / bin_width) * bin_width))
+    bins = np.arange(0, max_value + bin_width, bin_width)
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+    ax.hist(visible, bins=bins)
+    ax.set_title(f"{title} (hasta P98 = {upper:.2f})")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Numero de clientes")
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
 
 
 def main() -> None:
@@ -105,6 +166,20 @@ def main() -> None:
     ]
     tabla = pd.DataFrame([summarize(perfil[col], col) for col in variables])
 
+    variables_terciles = [
+        "n_intervalos",
+        "media_intervalos",
+        "mediana_intervalos",
+        "desviacion_intervalos",
+    ]
+    tabla_terciles = pd.DataFrame(
+        [
+            row
+            for variable in variables_terciles
+            for row in summarize_terciles(perfil[variable], variable)
+        ]
+    )
+
     resumen_general = pd.DataFrame(
         {
             "metrica": [
@@ -127,21 +202,51 @@ def main() -> None:
     )
 
     csv_path = output_dir / "eda_simple_churn.csv"
+    terciles_path = output_dir / "eda_simple_churn_terciles.csv"
     log_path = output_dir / "eda_simple_churn.log"
+
     tabla.to_csv(csv_path, index=False)
+    tabla_terciles.to_csv(terciles_path, index=False)
+
+    graficos = [
+        (
+            "n_intervalos",
+            "Distribucion del numero de intervalos por cliente",
+            "Numero de intervalos",
+            output_dir / "distribucion_n_intervalos.png",
+        ),
+        (
+            "mediana_intervalos",
+            "Distribucion de la mediana de intervalos por cliente",
+            "Mediana de intervalos (dias)",
+            output_dir / "distribucion_mediana_intervalos.png",
+        ),
+        (
+            "desviacion_intervalos",
+            "Distribucion de la desviacion de intervalos por cliente",
+            "Desviacion de intervalos (dias)",
+            output_dir / "distribucion_desviacion_intervalos.png",
+        ),
+    ]
+    for variable, title, xlabel, path in graficos:
+        save_distribution_plot(perfil[variable], title, xlabel, path)
 
     output_text = (
         "\n=== RESUMEN GENERAL ===\n"
         + resumen_general.to_string(index=False)
         + "\n\n=== TABLA ESTADISTICA ===\n"
         + tabla.to_string(index=False, float_format=lambda x: f"{x:,.2f}")
+        + "\n\n=== TABLA POR TERCILES EXCLUYENTES ===\n"
+        + tabla_terciles.to_string(index=False, float_format=lambda x: f"{x:,.2f}")
         + f"\n\nTiempo total: {time.perf_counter() - started:.2f} s\n"
     )
     print(output_text)
     log_path.write_text(output_text, encoding="utf-8")
 
-    print(f"[EDA] Tabla guardada en: {csv_path}")
-    print(f"[EDA] Log guardado en: {log_path}")
+    print(f"[EDA] Tabla general: {csv_path}")
+    print(f"[EDA] Tabla por terciles: {terciles_path}")
+    print(f"[EDA] Graficos: {output_dir}/distribucion_*.png")
+    print(f"[EDA] Log: {log_path}")
 
 
 if __name__ == "__main__":
