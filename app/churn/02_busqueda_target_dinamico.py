@@ -121,7 +121,7 @@ def main() -> None:
 
     for alfa in alphas:
         for gamma in gammas:
-            H = alfa * B + gamma * (clientes["mediana_cliente"] - B)
+            H = alfa * B + gamma * (clientes["mediana_cliente"])
             H = H.clip(lower=1.0)
 
             dias_h = np.ceil(H).astype(int)
