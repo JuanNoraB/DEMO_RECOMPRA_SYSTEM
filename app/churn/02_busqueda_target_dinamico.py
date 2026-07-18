@@ -1,13 +1,22 @@
 """Calibracion empirica de un horizonte dinamico para churn a nivel cliente.
 
 Se usan dos anios de historico y el periodo posterior disponible como seguimiento.
-Para cada cliente con al menos un intervalo se calcula una base B:
-media o mediana de sus intervalos historicos.
+Para cada cliente con al menos un intervalo se calcula una base B: media o mediana.
+Para cada alfa: H_i = alfa * B_i.
+La validacion posterior usa xB * B_i, donde xB es configurable.
+"""
+from __future__ import annotations
 
-Para cada alfa:
-    H_i = alfa * B_i
+import argparse
+import time
+from pathlib import Path
 
-Clasificacion:
-- no_churn: se observa una compra dentro de (T, T + H_i]
-- churn_provisional: H_i es completamente observable y no hay compra en H_i
-- reactivado: churn provisional que compra antes de T + H_i
+import matplotlib
+import numpy as np
+import pandas as pd
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT
