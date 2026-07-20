@@ -1,9 +1,8 @@
-"""Une datos demograficos con el historico usado para las features de churn.
+"""Join de datos demograficos (CC.csv) con el historico usado para churn.
 
-El periodo historico se calcula con exactamente la misma regla temporal del script 02:
-    T = fecha_max - 1 anio
-    inicio = T - 2 anios + 1 dia
-
-Se conserva solo [inicio, T] para construir posteriormente las caracteristicas.
-El join es LEFT: no se elimina ninguna transaccion del historico por falta de datos
-demogra
+Pasos:
+1. Lee CC.csv (IDENTIFICACION, FECHA_NACIMIENTO, SEXO), tolerando lineas corruptas.
+2. Limpia IDENTIFICACION y la conserva como string.
+3. Convierte FECHA_NACIMIENTO y calcula EDAD.
+4. Deduplica IDENTIFICACION priorizando registros con fecha de nacimiento valida.
+5. Obtiene del historico exactamente la ventana de dos anios usada en
