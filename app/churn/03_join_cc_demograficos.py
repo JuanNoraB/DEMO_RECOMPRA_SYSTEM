@@ -164,6 +164,30 @@ def hacer_join(hist_path: Path, cc: pd.DataFrame, output: Path, min_compras: int
         print(f"   media EDAD disponible   : {dem['EDAD'].mean():.2f}")
         print(f"   mediana EDAD disponible : {dem['EDAD'].median():.2f}")
 
+    # Imputacion final usando estadisticas calculadas a nivel de cliente,
+    # para que clientes con mas transacciones no tengan mayor peso.
+    mediana_edad = float(dem["EDAD"].median())
+    clientes_edad_imputada = int(dem["EDAD"].isna().sum())
+    clientes_sexo_desconocido = int(dem["SEXO"].isna().sum())
+
+    # Convencion solicitada:
+    # 0 = EDAD imputada, 1 = EDAD original/no imputada.
+    merged["EDAD_IMPUTADA"] = merged["EDAD"].notna().astype("int8")
+    merged["EDAD"] = merged["EDAD"].fillna(mediana_edad)
+    merged["SEXO"] = merged["SEXO"].fillna("DESCONOCIDO")
+
+    dem_final = merged[
+        ["IDENTIFICACION", "EDAD", "SEXO", "EDAD_IMPUTADA"]
+    ].drop_duplicates("IDENTIFICACION")
+
+    print("\n   === IMPUTACION DEMOGRAFICA FINAL ===")
+    print(f"   mediana usada para imputar EDAD : {mediana_edad:.2f}")
+    print(f"   clientes con EDAD imputada      : {clientes_edad_imputada:,}")
+    print(f"   clientes con SEXO DESCONOCIDO   : {clientes_sexo_desconocido:,}")
+    print("   EDAD_IMPUTADA                    : 0 = imputada, 1 = original")
+    print(f"   nulos finales EDAD              : {dem_final['EDAD'].isna().sum():,}")
+    print(f"   nulos finales SEXO              : {dem_final['SEXO'].isna().sum():,}")
+
     output.parent.mkdir(parents=True, exist_ok=True)
     merged.to_parquet(output, index=False)
     print(f"\n   parquet guardado en: {output}")
