@@ -1,35 +1,37 @@
 """Optimización de hiperparámetros LightGBM para churn mediante Successive Halving.
 
-Continuidad del flujo:
+Flujo:
     05_generar_target_final.py
         -> data/churn/dataset_churn_final.parquet
     06_importancia_caracteristicas.py
         -> análisis descriptivo de importancia
     07_hptuning_lgbm.py
-        -> split estratificado 80/10/10
-        -> tuning exclusivamente con training + validation
-        -> test persistido y completamente aislado
+        -> reutiliza o crea una única vez el split estratificado 80/10/10
+        -> tuning exclusivamente con TRAIN + VALIDATION
+        -> TEST persistido y completamente aislado
 
-La lógica de búsqueda reutiliza el esquema robusto empleado en app/hptuning_lgbm.py
-para recompra: candidatos aleatorios, Successive Halving paralelo, resultados por ronda,
-reanudar ejecuciones interrumpidas y control de oversubscription de CPU.
+El script reutiliza la lógica robusta del tuning de recompra: candidatos aleatorios,
+Successive Halving paralelo, resultados persistidos por ronda, reanudación de
+corridas interrumpidas y control de oversubscription de CPU.
 
-Diferencias principales para churn:
-- Se utilizan siempre las 15 características definidas para churn.
+Diferencias para churn:
+- Se utilizan las 15 características definidas para churn.
 - SEXO se mantiene como categórica nativa de LightGBM.
-- scale_pos_weight se calcula una sola vez desde TRAIN y permanece fijo.
+- scale_pos_weight forma parte del espacio de hiperparámetros con la grilla
+  interna {1, 2, 4, ratio TRAIN}.
 - No se aplica undersampling, oversampling, SMOTE ni window slicing.
-- El split final es 80 % train, 10 % validation y 10 % test.
+- El split final es 80 % TRAIN, 10 % VALIDATION y 10 % TEST.
 - TEST nunca participa en tuning, early stopping ni selección de umbral.
-- Early stopping de la ronda final utiliza PR-AUC de validación.
+- Early stopping de la ronda final utiliza PR-AUC de VALIDATION.
 
-Ejemplo por defecto:
-    python app/churn/07_hptuning_lgbm.py
-
-Ejemplo servidor:
+Ejemplo servidor con una reserva de 128 CPU:
     python app/churn/07_hptuning_lgbm.py \
         --workers 8 \
-        --threads-per-worker 16
+        --threads-per-worker 16 \
+        --force
+
+``--force`` reinicia únicamente los artefactos del tuning. Los splits existentes
+no se eliminan ni se regeneran si su configuración es compatible.
 """
 from __future__ import annotations
 
@@ -49,7 +51,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-# Evita que BLAS cree hilos adicionales dentro de cada worker.
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
@@ -82,6 +83,7 @@ ID_COL = "IDENTIFICACION"
 TARGET_COL = "target"
 CATEGORICAL_COLUMNS = ["SEXO"]
 SEX_CATEGORIES = ["F", "M", "DESCONOCIDO"]
+CLASS_WEIGHT_GRID: tuple[float | str, ...] = (1.0, 2.0, 4.0, "auto")
 
 FEATURE_COLUMNS = [
     "dias_desde_ultima_compra",
@@ -101,7 +103,6 @@ FEATURE_COLUMNS = [
     "EDAD_IMPUTADA",
 ]
 
-# Datos compartidos por fork entre workers. Solo TRAIN y VALIDATION.
 _XTR: pd.DataFrame | None = None
 _YTR: np.ndarray | None = None
 _XVA: pd.DataFrame | None = None
@@ -134,7 +135,6 @@ def save_json(path: Path, value: Any) -> None:
 def crear_logger(path: Path) -> Callable[[str], None]:
     path = path.expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
-
     with path.open("a", encoding="utf-8") as handle:
         handle.write(
             "\n=== 07_hptuning_lgbm.py | "
@@ -188,6 +188,9 @@ def acquire_lock(label: str):
 
 def parse_args() -> argparse.Namespace:
     cpus = available_cpus()
+    default_threads = min(16, cpus)
+    default_workers = max(1, min(8, cpus // default_threads))
+
     p = argparse.ArgumentParser(
         description="LightGBM churn: split 80/10/10 + Successive Halving paralelo por PR-AUC"
     )
@@ -197,31 +200,32 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--docs-dir", type=Path, default=None)
     p.add_argument("--splits-dir", type=Path, default=None)
     p.add_argument("--log", type=Path, default=DEFAULT_LOG)
-
     p.add_argument("--candidates", "--trials", dest="candidates", type=int, default=500)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--test-size", type=float, default=0.10)
     p.add_argument("--val-size", type=float, default=0.10)
-
-    p.add_argument("--workers", type=int, default=min(8, max(1, cpus)))
-    p.add_argument("--threads-per-worker", type=int, default=16)
+    p.add_argument("--workers", type=int, default=default_workers)
+    p.add_argument("--threads-per-worker", type=int, default=default_threads)
     p.add_argument("--round-fractions", default="0.20,0.40,0.70,1.0")
     p.add_argument("--round-rounds", default="128,320,700,1600")
     p.add_argument("--survivors", default="100,25,8,1")
     p.add_argument("--final-early-stopping", type=int, default=100)
-    p.add_argument("--force", action="store_true")
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Reinicia artefactos del tuning; no elimina ni regenera splits compatibles.",
+    )
     return p.parse_args()
 
 
-def validar_dataset(df: pd.DataFrame) -> None:
+def validar_dataset(df: pd.DataFrame, require_unique_ids: bool = True) -> None:
     requeridas = [ID_COL, TARGET_COL] + FEATURE_COLUMNS
     faltantes = [c for c in requeridas if c not in df.columns]
     if faltantes:
         raise ValueError(f"Faltan columnas requeridas: {faltantes}")
-
     if df[ID_COL].isna().any():
         raise ValueError(f"{ID_COL} contiene valores nulos")
-    if df[ID_COL].duplicated().any():
+    if require_unique_ids and df[ID_COL].duplicated().any():
         raise ValueError("El dataset debe contener una sola fila por IDENTIFICACION")
     if df[TARGET_COL].isna().any():
         raise ValueError("target contiene valores nulos")
@@ -232,10 +236,15 @@ def validar_dataset(df: pd.DataFrame) -> None:
         raise ValueError(f"target debe contener exactamente las clases 0 y 1. Valores: {values}")
 
 
-def preparar_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Prepara las 15 características preservando SEXO como categórica nativa."""
-    x = df[FEATURE_COLUMNS].copy()
+def normalizar_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df[ID_COL] = df[ID_COL].astype("string").str.strip()
+    df[TARGET_COL] = pd.to_numeric(df[TARGET_COL], errors="raise").astype("int8")
+    return df
 
+
+def preparar_features(df: pd.DataFrame) -> pd.DataFrame:
+    x = df[FEATURE_COLUMNS].copy()
     for col in FEATURE_COLUMNS:
         if col == "SEXO":
             sexo = x[col].astype("string").fillna("DESCONOCIDO")
@@ -244,7 +253,6 @@ def preparar_features(df: pd.DataFrame) -> pd.DataFrame:
         else:
             x[col] = pd.to_numeric(x[col], errors="coerce")
             x[col] = x[col].replace([np.inf, -np.inf], np.nan).astype("float32")
-
     return x
 
 
@@ -254,22 +262,17 @@ def split_estratificado(
     val_size: float,
     test_size: float,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Genera train/validation/test con proporciones globales y estratificación."""
     if val_size <= 0 or test_size <= 0 or val_size + test_size >= 1:
         raise ValueError("--val-size y --test-size deben ser > 0 y sumar menos de 1")
 
     idx = np.arange(len(df))
     y = df[TARGET_COL].to_numpy(dtype=np.int8)
-
     dev_idx, test_idx = train_test_split(
         idx,
         test_size=test_size,
         random_state=seed,
         stratify=y,
     )
-
-    # val_size se expresa respecto al dataset total. Tras separar test,
-    # se transforma a proporción relativa del conjunto de desarrollo.
     val_relative = val_size / (1.0 - test_size)
     train_idx, val_idx = train_test_split(
         dev_idx,
@@ -277,11 +280,11 @@ def split_estratificado(
         random_state=seed + 1,
         stratify=y[dev_idx],
     )
-
-    train_df = df.iloc[train_idx].reset_index(drop=True)
-    val_df = df.iloc[val_idx].reset_index(drop=True)
-    test_df = df.iloc[test_idx].reset_index(drop=True)
-    return train_df, val_df, test_df
+    return (
+        df.iloc[train_idx].reset_index(drop=True),
+        df.iloc[val_idx].reset_index(drop=True),
+        df.iloc[test_idx].reset_index(drop=True),
+    )
 
 
 def distribucion_split(df: pd.DataFrame) -> dict[str, float | int]:
@@ -296,6 +299,45 @@ def distribucion_split(df: pd.DataFrame) -> dict[str, float | int]:
     }
 
 
+def source_signature(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    return {
+        "path": str(path.resolve()),
+        "size_bytes": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+    }
+
+
+def split_paths(splits_dir: Path) -> dict[str, Path]:
+    return {
+        "train": splits_dir / "train.parquet",
+        "validation": splits_dir / "validation.parquet",
+        "test": splits_dir / "test.parquet",
+        "summary": splits_dir / "split_summary.json",
+    }
+
+
+def validate_split_integrity(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+) -> None:
+    for name, frame in (
+        ("train", train_df),
+        ("validation", val_df),
+        ("test", test_df),
+    ):
+        validar_dataset(frame)
+        if frame.empty:
+            raise ValueError(f"El split {name} está vacío")
+
+    train_ids = set(train_df[ID_COL].astype(str))
+    val_ids = set(val_df[ID_COL].astype(str))
+    test_ids = set(test_df[ID_COL].astype(str))
+    if train_ids & val_ids or train_ids & test_ids or val_ids & test_ids:
+        raise ValueError("Los splits contienen IDENTIFICACION solapadas")
+
+
 def persistir_splits(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
@@ -307,33 +349,139 @@ def persistir_splits(
     test_size: float,
 ) -> dict[str, Any]:
     splits_dir.mkdir(parents=True, exist_ok=True)
-
-    train_path = splits_dir / "train.parquet"
-    val_path = splits_dir / "validation.parquet"
-    test_path = splits_dir / "test.parquet"
-
-    train_df.to_parquet(train_path, index=False)
-    val_df.to_parquet(val_path, index=False)
-    test_df.to_parquet(test_path, index=False)
+    paths = split_paths(splits_dir)
+    train_df.to_parquet(paths["train"], index=False)
+    val_df.to_parquet(paths["validation"], index=False)
+    test_df.to_parquet(paths["test"], index=False)
 
     summary = {
-        "source": str(input_path),
+        "schema_version": 2,
+        "source": source_signature(input_path),
         "seed": seed,
         "split_type": "row_stratified",
         "train_fraction": 1.0 - val_size - test_size,
         "validation_fraction": val_size,
         "test_fraction": test_size,
-        "train": {**distribucion_split(train_df), "path": str(train_path)},
-        "validation": {**distribucion_split(val_df), "path": str(val_path)},
-        "test": {**distribucion_split(test_df), "path": str(test_path)},
+        "train": {**distribucion_split(train_df), "path": str(paths["train"])},
+        "validation": {**distribucion_split(val_df), "path": str(paths["validation"])},
+        "test": {**distribucion_split(test_df), "path": str(paths["test"])},
     }
-    save_json(splits_dir / "split_summary.json", summary)
+    save_json(paths["summary"], summary)
     return summary
 
 
-def make_candidates(count: int, seed: int, scale_pos_weight: float) -> list[dict[str, Any]]:
-    """Mismo espacio base de recompra, excepto scale_pos_weight fijo desde TRAIN."""
+def split_summary_compatible(
+    summary: dict[str, Any],
+    input_path: Path,
+    seed: int,
+    val_size: float,
+    test_size: float,
+) -> bool:
+    source = summary.get("source")
+    source_path = source.get("path") if isinstance(source, dict) else source
+    expected = {
+        "seed": seed,
+        "train_fraction": 1.0 - val_size - test_size,
+        "validation_fraction": val_size,
+        "test_fraction": test_size,
+    }
+    if Path(str(source_path)).expanduser().resolve() != input_path.resolve():
+        return False
+    for key, value in expected.items():
+        observed = summary.get(key)
+        if key == "seed":
+            if observed != value:
+                return False
+        elif observed is None or not math.isclose(float(observed), float(value), abs_tol=1e-12):
+            return False
+    return True
+
+
+def cargar_o_crear_splits(
+    input_path: Path,
+    splits_dir: Path,
+    seed: int,
+    val_size: float,
+    test_size: float,
+    log: Callable[[str], None],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any], dict[str, Any]]:
+    paths = split_paths(splits_dir)
+    complete = all(path.exists() for path in paths.values())
+
+    if complete:
+        with paths["summary"].open(encoding="utf-8") as handle:
+            summary = json.load(handle)
+        if not split_summary_compatible(summary, input_path, seed, val_size, test_size):
+            raise RuntimeError(
+                "Los splits existentes no corresponden al input/seed/proporciones solicitados. "
+                "Use otra ruta --splits-dir o elimine explícitamente el directorio incompatible."
+            )
+
+        log("\n[1/7] Reutilizando split estratificado existente ...")
+        t0 = time.time()
+        train_df = normalizar_dataset(pd.read_parquet(paths["train"]))
+        val_df = normalizar_dataset(pd.read_parquet(paths["validation"]))
+        test_df = normalizar_dataset(pd.read_parquet(paths["test"]))
+        validate_split_integrity(train_df, val_df, test_df)
+        dist_total = {
+            "rows": len(train_df) + len(val_df) + len(test_df),
+            "target_0": sum(distribucion_split(x)["target_0"] for x in (train_df, val_df, test_df)),
+            "target_1": sum(distribucion_split(x)["target_1"] for x in (train_df, val_df, test_df)),
+        }
+        dist_total["positive_rate"] = dist_total["target_1"] / dist_total["rows"]
+        log(f"   splits cargados desde: {splits_dir}")
+        log("   no se regeneraron ni sobrescribieron archivos")
+        log(f"   tiempo: {time.time() - t0:.1f}s")
+        return train_df, val_df, test_df, summary, dist_total
+
+    if any(path.exists() for path in paths.values()):
+        raise RuntimeError(
+            f"El directorio de splits está incompleto: {splits_dir}. "
+            "Elimínelo explícitamente antes de reconstruirlo."
+        )
+
+    log("\n[1/7] No existen splits; leyendo dataset y generando división 80/10/10 ...")
+    t0 = time.time()
+    df = normalizar_dataset(pd.read_parquet(input_path))
+    validar_dataset(df)
+    dist_total = distribucion_split(df)
+    train_df, val_df, test_df = split_estratificado(df, seed, val_size, test_size)
+    validate_split_integrity(train_df, val_df, test_df)
+    summary = persistir_splits(
+        train_df,
+        val_df,
+        test_df,
+        splits_dir,
+        input_path,
+        seed,
+        val_size,
+        test_size,
+    )
+    del df
+    gc.collect()
+    log(f"   splits creados una sola vez en: {splits_dir}")
+    log(f"   tiempo: {time.time() - t0:.1f}s")
+    return train_df, val_df, test_df, summary, dist_total
+
+
+def resolve_class_weights(train_ratio: float) -> list[float]:
+    values: list[float] = []
+    for item in CLASS_WEIGHT_GRID:
+        value = train_ratio if item == "auto" else float(item)
+        if not any(np.isclose(value, old, rtol=1e-12, atol=1e-12) for old in values):
+            values.append(float(value))
+    return values
+
+
+def balanced_values(values: list[float], count: int, rng: np.random.Generator) -> list[float]:
+    result = [values[i % len(values)] for i in range(count)]
+    rng.shuffle(result)
+    return result
+
+
+def make_candidates(count: int, seed: int, class_weights: list[float]) -> list[dict[str, Any]]:
     rng = np.random.default_rng(seed)
+    weights = balanced_values(class_weights, count, rng)
     out: list[dict[str, Any]] = []
 
     for cid in range(count):
@@ -359,15 +507,13 @@ def make_candidates(count: int, seed: int, scale_pos_weight: float) -> list[dict
             "lambda_l2": log_uniform(rng, 1e-8, 10.0),
             "min_gain_to_split": float(rng.uniform(0.0, 1.0)),
             "max_bin": int(rng.choice([63, 127])),
-            "scale_pos_weight": float(scale_pos_weight),
+            "scale_pos_weight": float(weights[cid]),
         }
         out.append({"candidate_id": cid, "params": params})
-
     return out
 
 
 def nested_order(y: np.ndarray, seed: int) -> np.ndarray:
-    """Orden estratificado reproducible para generar subconjuntos anidados."""
     rng = np.random.default_rng(seed)
     pos = np.flatnonzero(y == 1)
     neg = np.flatnonzero(y == 0)
@@ -377,7 +523,6 @@ def nested_order(y: np.ndarray, seed: int) -> np.ndarray:
     order = np.empty(len(y), dtype=np.int64)
     p = n = 0
     pos_rate = len(pos) / len(y)
-
     for i in range(len(y)):
         need_pos = (p < len(pos)) and (n >= len(neg) or p / max(1, i) < pos_rate)
         if need_pos:
@@ -402,7 +547,6 @@ def subset_from_order(
 
 
 def pr_auc_eval(preds: np.ndarray, dataset: lgb.Dataset):
-    """Métrica custom para que early stopping se base en PR-AUC."""
     y_true = dataset.get_label()
     score = float(average_precision_score(y_true, preds))
     return "pr_auc", score, True
@@ -411,7 +555,6 @@ def pr_auc_eval(preds: np.ndarray, dataset: lgb.Dataset):
 def metricas(y: np.ndarray, p: np.ndarray) -> dict[str, float]:
     pr_auc = float(average_precision_score(y, p))
     roc_auc = float(roc_auc_score(y, p))
-
     precision_curve, recall_curve, thresholds = precision_recall_curve(y, p)
     if len(thresholds):
         den = precision_curve[:-1] + recall_curve[:-1]
@@ -430,7 +573,6 @@ def metricas(y: np.ndarray, p: np.ndarray) -> dict[str, float]:
     n_top = max(1, int(math.ceil(len(p) * 0.10)))
     top_idx = np.argpartition(p, -n_top)[-n_top:]
     top_rate = float(y[top_idx].mean())
-
     return {
         "pr_auc": pr_auc,
         "roc_auc": roc_auc,
@@ -461,7 +603,6 @@ def train_booster(
         categorical_feature=CATEGORICAL_COLUMNS,
         free_raw_data=True,
     )
-
     callbacks = [lgb.log_evaluation(0)]
 
     if early_stopping > 0:
@@ -500,7 +641,6 @@ def train_booster(
             callbacks=callbacks,
         )
         best_iteration = rounds
-
     return model, best_iteration
 
 
@@ -512,7 +652,6 @@ def evaluate(task):
     local = dict(params)
     local["num_threads"] = threads
     started = time.time()
-
     model, best_iteration = train_booster(
         local,
         rounds,
@@ -524,9 +663,9 @@ def evaluate(task):
     )
     probabilities = model.predict(_XVA, num_iteration=best_iteration)
     result = metricas(_YVA, probabilities)
-
     return {
         "candidate_id": cid,
+        "scale_pos_weight": float(params["scale_pos_weight"]),
         "best_iteration": best_iteration,
         "duration_seconds": round(time.time() - started, 3),
         **{k: float(v) for k, v in result.items()},
@@ -543,10 +682,8 @@ def save_records(records: list[dict[str, Any]], path: Path) -> pd.DataFrame:
 
 
 def plot_halving(all_results: pd.DataFrame, output: Path) -> None:
-    """Gráfico compacto de distribución PR-AUC y mejor valor por ronda."""
     if all_results.empty:
         return
-
     rounds = sorted(all_results["round"].astype(int).unique())
     values = [
         all_results.loc[all_results["round"].astype(int) == r, "pr_auc"].to_numpy()
@@ -555,7 +692,11 @@ def plot_halving(all_results: pd.DataFrame, output: Path) -> None:
     best = [float(np.max(v)) for v in values]
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
-    ax.boxplot(values, labels=[f"R{r}" for r in rounds], showfliers=False)
+    labels = [f"R{r}" for r in rounds]
+    try:
+        ax.boxplot(values, tick_labels=labels, showfliers=False)
+    except TypeError:
+        ax.boxplot(values, labels=labels, showfliers=False)
     ax.plot(range(1, len(rounds) + 1), best, marker="o", label="Mejor PR-AUC")
     ax.set_xlabel("Ronda de Successive Halving")
     ax.set_ylabel("PR-AUC de validación")
@@ -566,6 +707,21 @@ def plot_halving(all_results: pd.DataFrame, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=160, bbox_inches="tight")
     plt.close(fig)
+
+
+def weight_summary(all_results: pd.DataFrame) -> pd.DataFrame:
+    return (
+        all_results.groupby(["round", "scale_pos_weight"], as_index=False)
+        .agg(
+            candidates=("candidate_id", "count"),
+            pr_auc_mean=("pr_auc", "mean"),
+            pr_auc_median=("pr_auc", "median"),
+            pr_auc_max=("pr_auc", "max"),
+            f1_max=("f1", "max"),
+            lift_at_10_max=("lift_at_10", "max"),
+        )
+        .sort_values(["round", "pr_auc_max"], ascending=[True, False])
+    )
 
 
 def main() -> None:
@@ -649,56 +805,30 @@ def main() -> None:
     log(f"splits_dir: {splits_dir}")
     log(f"candidatos: {args.candidates}")
     log(f"split global: train={train_fraction:.0%} | validation={args.val_size:.0%} | test={args.test_size:.0%}")
+    log(f"scale_pos_weight grid: {list(CLASS_WEIGHT_GRID)}")
     log(f"round_fractions: {fractions}")
     log(f"round_rounds: {budgets}")
     log(f"survivors: {survivors}")
     log(f"early_stopping final: {args.final_early_stopping}")
     log(f"CPU: workers={args.workers} x threads={args.threads_per_worker} = {requested}/{cpus}")
 
-    log("\n[1/7] Leyendo y validando dataset final de churn ...")
-    t0 = time.time()
-    df = pd.read_parquet(input_path)
-    validar_dataset(df)
-    df[ID_COL] = df[ID_COL].astype("string").str.strip()
-    df[TARGET_COL] = pd.to_numeric(df[TARGET_COL], errors="raise").astype("int8")
-
-    dist_total = distribucion_split(df)
-    log(f"   filas: {dist_total['rows']:,}")
-    log(f"   clientes unicos: {df[ID_COL].nunique():,}")
-    log(f"   target 0: {dist_total['target_0']:,}")
-    log(f"   target 1: {dist_total['target_1']:,}")
-    log(f"   churn: {dist_total['positive_rate'] * 100:.2f}%")
-    log(f"   features: {len(FEATURE_COLUMNS)}")
-    log(f"   tiempo: {time.time() - t0:.1f}s")
-
-    log("\n[2/7] Generando split estratificado 80/10/10 ...")
-    t0 = time.time()
-    train_df, val_df, test_df = split_estratificado(
-        df,
-        seed=args.seed,
-        val_size=args.val_size,
-        test_size=args.test_size,
-    )
-    split_summary = persistir_splits(
-        train_df,
-        val_df,
-        test_df,
-        splits_dir,
+    train_df, val_df, test_df, split_summary, dist_total = cargar_o_crear_splits(
         input_path,
+        splits_dir,
         args.seed,
         args.val_size,
         args.test_size,
+        log,
     )
 
-    for name in ("train", "validation", "test"):
-        d = split_summary[name]
+    log("\n[2/7] Verificando distribución de los splits ...")
+    for name, frame in (("train", train_df), ("validation", val_df), ("test", test_df)):
+        d = distribucion_split(frame)
         log(
             f"   {name:<10}: filas={d['rows']:,} | target0={d['target_0']:,} | "
             f"target1={d['target_1']:,} | churn={d['positive_rate'] * 100:.2f}%"
         )
-    log(f"   splits persistidos en: {splits_dir}")
     log("   TEST queda persistido y NO se utiliza durante el tuning")
-    log(f"   tiempo: {time.time() - t0:.1f}s")
 
     log("\n[3/7] Preparando TRAIN y VALIDATION ...")
     t0 = time.time()
@@ -709,29 +839,28 @@ def main() -> None:
 
     n_pos_train = int((ytr_full == 1).sum())
     n_neg_train = int((ytr_full == 0).sum())
-    scale_pos_weight = n_neg_train / n_pos_train
+    train_ratio = n_neg_train / n_pos_train
+    class_weights = resolve_class_weights(train_ratio)
 
     nulos_train = int(xtr_full.select_dtypes(include=[np.number]).isna().sum().sum())
     nulos_val = int(xva_full.select_dtypes(include=[np.number]).isna().sum().sum())
-
-    log(f"   scale_pos_weight = {n_neg_train:,} / {n_pos_train:,} = {scale_pos_weight:.6f}")
+    log(f"   ratio natural TRAIN = {n_neg_train:,} / {n_pos_train:,} = {train_ratio:.6f}")
+    log(f"   scale_pos_weight evaluados: {[round(x, 6) for x in class_weights]}")
     log(f"   SEXO: categórica nativa de LightGBM ({SEX_CATEGORIES})")
     log(f"   nulos numericos train: {nulos_train:,}")
     log(f"   nulos numericos validation: {nulos_val:,}")
     log(f"   tiempo: {time.time() - t0:.1f}s")
 
-    # A partir de aquí test_df no vuelve a utilizarse.
-    del test_df, df
+    del test_df
     gc.collect()
 
     train_order = nested_order(ytr_full, args.seed + 100)
     val_order = nested_order(yva_full, args.seed + 200)
-
-    candidates = make_candidates(args.candidates, args.seed, scale_pos_weight)
+    candidates = make_candidates(args.candidates, args.seed, class_weights)
     by_id = {c["candidate_id"]: c for c in candidates}
 
     definition = {
-        "schema_version": 1,
+        "schema_version": 2,
         "search_method": "parallel_successive_halving_random_nested",
         "input": str(input_path),
         "experiment_name": args.experiment_name,
@@ -746,8 +875,11 @@ def main() -> None:
             "validation_fraction": args.val_size,
             "test_fraction": args.test_size,
             "splits_dir": str(splits_dir),
+            "reuse_existing": True,
         },
-        "scale_pos_weight": scale_pos_weight,
+        "scale_pos_weight_grid_definition": list(CLASS_WEIGHT_GRID),
+        "scale_pos_weight_grid_resolved": class_weights,
+        "scale_pos_weight_train_ratio": train_ratio,
         "round_fractions": fractions,
         "round_rounds": budgets,
         "survivors": survivors,
@@ -767,13 +899,13 @@ def main() -> None:
         if old_cmp != new_cmp:
             raise RuntimeError(
                 "El experimento existente tiene una configuración incompatible. "
-                "Use otro --experiment-name o ejecute con --force."
+                "Ejecute con --force para reiniciar SOLO el tuning; los splits se conservarán."
             )
     save_json(definition_path, definition)
 
     log("\n[4/7] Iniciando Successive Halving ...")
     log("   criterio único de supervivencia: PR-AUC de validation")
-    log("   scale_pos_weight permanece fijo durante todos los candidatos")
+    log("   scale_pos_weight participa dentro del espacio de hiperparámetros")
     log("   early stopping por PR-AUC únicamente en la ronda final")
 
     active = list(by_id)
@@ -787,9 +919,7 @@ def main() -> None:
         result_path = output_dir / f"round_{round_id}_results.csv"
         old_frame = pd.read_csv(result_path) if result_path.exists() else pd.DataFrame()
         records = old_frame.to_dict("records") if not old_frame.empty else []
-        completed = (
-            set(old_frame["candidate_id"].astype(int)) if not old_frame.empty else set()
-        )
+        completed = set(old_frame["candidate_id"].astype(int)) if not old_frame.empty else set()
         pending = [cid for cid in active if cid not in completed]
 
         _XTR, _YTR = subset_from_order(xtr_full, ytr_full, train_order, fraction)
@@ -814,7 +944,6 @@ def main() -> None:
                 )
                 for cid in pending
             ]
-
             done = 0
             with ProcessPoolExecutor(
                 max_workers=args.workers,
@@ -839,6 +968,7 @@ def main() -> None:
                     log(
                         f"[LGBM-R{round_id} {done:03d}/{len(pending):03d}] "
                         f"C{int(record['candidate_id']):04d} | "
+                        f"w={record['scale_pos_weight']:.4f} | "
                         f"PR-AUC={record['pr_auc']:.6f} | "
                         f"F1={record['f1']:.6f} | "
                         f"Lift@10={record['lift_at_10']:.4f} | "
@@ -857,7 +987,6 @@ def main() -> None:
 
         active = frame.head(min(keep, len(frame)))["candidate_id"].astype(int).tolist()
         all_frames.append(frame)
-
         round_duration = time.time() - round_started
         save_json(
             output_dir / f"round_{round_id}_survivors.json",
@@ -866,11 +995,13 @@ def main() -> None:
                 "survivors": active,
                 "best_candidate": int(active[0]),
                 "best_pr_auc": float(frame.iloc[0]["pr_auc"]),
+                "best_scale_pos_weight": float(frame.iloc[0]["scale_pos_weight"]),
                 "duration_seconds": round_duration,
             },
         )
         log(
             f"[LGBM-R{round_id}] mejor=C{active[0]:04d} | "
+            f"w={float(frame.iloc[0]['scale_pos_weight']):.4f} | "
             f"PR-AUC={float(frame.iloc[0]['pr_auc']):.6f} | "
             f"pasan={len(active)} | tiempo={round_duration / 60:.1f}m"
         )
@@ -882,7 +1013,6 @@ def main() -> None:
     winner = active[0]
     final_params = dict(by_id[winner]["params"])
     final_params["num_threads"] = args.threads_per_worker
-
     model, best_iteration = train_booster(
         final_params,
         budgets[-1],
@@ -905,8 +1035,11 @@ def main() -> None:
         output_dir / "top10_trials.csv",
         index=False,
     )
+    weights_table = weight_summary(all_results)
+    weights_table.to_csv(output_dir / "scale_pos_weight_summary.csv", index=False)
 
     log(f"   ganador: C{winner:04d}")
+    log(f"   scale_pos_weight ganador: {final_params['scale_pos_weight']:.6f}")
     log(f"   best_iteration: {best_iteration}")
     log(f"   PR-AUC validation: {best_metrics['pr_auc']:.6f}")
     log(f"   ROC-AUC validation: {best_metrics['roc_auc']:.6f}")
@@ -916,9 +1049,10 @@ def main() -> None:
     log(f"   Lift@10 validation: {best_metrics['lift_at_10']:.4f}")
     log(f"   threshold F1 validation: {best_metrics['threshold_f1']:.6f}")
 
-    log("\n[6/7] Generando resumen y grafico de tuning ...")
+    log("\n[6/7] Generando resumen, tabla y grafico de tuning ...")
     plot_path = docs_dir / "successive_halving_pr_auc.png"
     plot_halving(all_results, plot_path)
+    weights_table.to_csv(docs_dir / "scale_pos_weight_summary.csv", index=False)
 
     summary = {
         "timestamp": datetime.now().isoformat(),
@@ -934,7 +1068,10 @@ def main() -> None:
         "categorical_features": CATEGORICAL_COLUMNS,
         "n_features_conceptual": len(FEATURE_COLUMNS),
         "split_summary": split_summary,
-        "scale_pos_weight_train": scale_pos_weight,
+        "scale_pos_weight_grid_definition": list(CLASS_WEIGHT_GRID),
+        "scale_pos_weight_grid_resolved": class_weights,
+        "scale_pos_weight_train_ratio": train_ratio,
+        "scale_pos_weight_selected": float(final_params["scale_pos_weight"]),
         "candidate_count": args.candidates,
         "best_candidate_id": winner,
         "best_params": final_hparams,
@@ -947,6 +1084,7 @@ def main() -> None:
         "threads_per_worker": args.threads_per_worker,
         "test_used_in_tuning": False,
         "plot": str(plot_path),
+        "weight_summary": str(docs_dir / "scale_pos_weight_summary.csv"),
         "duration_seconds": round(time.time() - started, 2),
     }
 
@@ -959,6 +1097,7 @@ def main() -> None:
         handle.write(json.dumps(summary, ensure_ascii=False) + "\n")
 
     log(f"   grafico: {plot_path}")
+    log(f"   tabla pesos: {docs_dir / 'scale_pos_weight_summary.csv'}")
     log(f"   resumen: {docs_dir / 'run_summary.json'}")
 
     log("\n[7/7] Proceso finalizado")
@@ -971,12 +1110,12 @@ def main() -> None:
         f"Lift@10={best_metrics['lift_at_10']:.4f}"
     )
     log(
-        f"[LGBM-HPT] Iteraciones finales={best_iteration} | "
+        f"[LGBM-HPT] Iteraciones={best_iteration} | "
         f"threshold={best_metrics['threshold_f1']:.6f} | "
-        f"scale_pos_weight={scale_pos_weight:.6f}"
+        f"scale_pos_weight seleccionado={final_params['scale_pos_weight']:.6f}"
     )
     log(f"[LGBM-HPT] Artefactos: {output_dir}")
-    log(f"[LGBM-HPT] Splits: {splits_dir}")
+    log(f"[LGBM-HPT] Splits reutilizables: {splits_dir}")
     log(f"[LGBM-HPT] Resumen rastreable: {docs_dir / 'run_summary.json'}")
     log("[LGBM-HPT] TEST NO se utilizó durante tuning, early stopping ni selección de umbral.")
     log(f"[LGBM-HPT] Tiempo total: {(time.time() - started) / 60:.1f} minutos")
